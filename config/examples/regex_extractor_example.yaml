@@ -1,0 +1,108 @@
+# Regex Extractor Example - Demonstrates regex-based field extraction
+# This example shows how to use regex extractors to parse and subselect data from input fields
+
+databases:
+  - path: "data/users.db"
+    alias: "users_db"
+
+mappings:
+  - name: "user_data_extraction"
+    
+    nodes:
+      - label: "User"
+        source: "users"
+        id_field: "id"
+        properties:
+          # Basic property without extraction
+          - field: "id"
+            type: "integer"
+          
+          # Extract first and last name from full_name field using multiple groups
+          - field: "full_name"
+            type: "string"
+            extractor:
+              type: "regex"
+              pattern: "^([A-Za-z]+)\\s+([A-Za-z]+)$"
+              groups: ["first_name", "last_name"]
+              fallback_strategy: "null"  # Set to null if pattern doesn't match
+          
+          # Extract username from email address using single group
+          - field: "email"
+            type: "string"
+            extractor:
+              type: "regex"
+              pattern: "([\\w.-]+)@[\\w.-]+\\.[a-zA-Z]{2,}"
+              group: 1  # Extract first capture group (username part)
+              fallback_strategy: "original"  # Keep original value if no match
+          
+          # Extract phone components using named groups
+          - field: "phone_number"
+            type: "string"
+            extractor:
+              type: "regex"
+              pattern: "(?:\\((?P<area_code>\\d{3})\\)\\s*|(?P<area_code2>\\d{3})-)(?P<exchange>\\d{3})-(?P<number>\\d{4})"
+              named_groups: true
+              fallback_strategy: "null"
+          
+          # Extract numeric ID from alphanumeric employee code
+          - field: "employee_code"
+            type: "integer"
+            extractor:
+              type: "regex"
+              pattern: "EMP(\\d+)"
+              group: 1
+              fallback_strategy: "null"
+          
+          # Extract domain from website URL using default extraction
+          - field: "website"
+            type: "string"
+            extractor:
+              type: "regex"
+              pattern: "https?://([\\w.-]+)"  # First group will be extracted by default
+              fallback_strategy: "empty"
+          
+          # Extract year from date string
+          - field: "join_date"
+            type: "integer"
+            extractor:
+              type: "regex"
+              pattern: "(\\d{4})-\\d{2}-\\d{2}"
+              group: 1
+              fallback_strategy: "null"
+
+      # Additional node showing relationship data extraction
+      - label: "Department"
+        source: "departments"
+        id_field: "dept_id"
+        properties:
+          - field: "dept_id"
+            type: "string"
+          - field: "dept_name"
+            type: "string"
+          
+          # Extract building and floor from location string "Building A, Floor 3"
+          - field: "location"
+            type: "string"
+            extractor:
+              type: "regex"
+              pattern: "Building ([A-Z]), Floor (\\d+)"
+              groups: ["building", "floor_number"]
+              fallback_strategy: "original"
+
+    relationships:
+      - type: "WORKS_IN"
+        from_node: "User"
+        to_node: "Department"
+        properties:
+          # Extract experience level from job title
+          - field: "job_title"
+            type: "string"
+            extractor:
+              type: "regex"
+              pattern: "(Senior|Junior|Lead)\\s+.*"
+              group: 1
+              fallback_strategy: "empty"
+
+output:
+  format: "csv"
+  directory: "output"

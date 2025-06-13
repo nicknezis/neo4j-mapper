@@ -184,6 +184,10 @@ class ConfigValidator:
                 f"Invalid property type '{prop['type']}' in {context}. "
                 f"Must be one of: {', '.join(self.VALID_TYPES)}"
             )
+        
+        # Validate extractor configuration if present
+        if "extractor" in prop:
+            self._validate_extractor(prop["extractor"], f"{context}.extractor")
 
     def _validate_relationship(self, rel: Dict[str, Any], context: str):
         """Validate relationship configuration."""
@@ -195,6 +199,70 @@ class ConfigValidator:
         if "properties" in rel:
             for i, prop in enumerate(rel["properties"]):
                 self._validate_property(prop, f"{context}.properties[{i}]")
+
+    def _validate_extractor(self, extractor: Dict[str, Any], context: str):
+        """Validate extractor configuration."""
+        if not isinstance(extractor, dict):
+            raise ValueError(f"Extractor in {context} must be a dictionary")
+        
+        # Validate extractor type
+        if "type" not in extractor:
+            raise ValueError(f"Missing required field 'type' in {context}")
+        
+        if extractor["type"] != "regex":
+            raise ValueError(f"Unsupported extractor type '{extractor['type']}' in {context}. Only 'regex' is supported")
+        
+        # Validate regex pattern
+        if "pattern" not in extractor:
+            raise ValueError(f"Missing required field 'pattern' in {context}")
+        
+        if not isinstance(extractor["pattern"], str):
+            raise ValueError(f"Field 'pattern' in {context} must be a string")
+        
+        # Validate regex pattern is compilable
+        try:
+            re.compile(extractor["pattern"])
+        except re.error as e:
+            raise ValueError(f"Invalid regex pattern in {context}: {e}")
+        
+        # Validate extraction mode configuration
+        extraction_modes = ["groups", "group", "named_groups"]
+        specified_modes = [mode for mode in extraction_modes if mode in extractor]
+        
+        if len(specified_modes) > 1:
+            raise ValueError(
+                f"Only one extraction mode can be specified in {context}. "
+                f"Found: {', '.join(specified_modes)}"
+            )
+        
+        # Validate specific extraction modes
+        if "groups" in extractor:
+            if not isinstance(extractor["groups"], list):
+                raise ValueError(f"Field 'groups' in {context} must be a list")
+            if not extractor["groups"]:
+                raise ValueError(f"Field 'groups' in {context} cannot be empty")
+            for i, group_name in enumerate(extractor["groups"]):
+                if not isinstance(group_name, str):
+                    raise ValueError(f"Group name at index {i} in {context} must be a string")
+        
+        if "group" in extractor:
+            if not isinstance(extractor["group"], int):
+                raise ValueError(f"Field 'group' in {context} must be an integer")
+            if extractor["group"] < 1:
+                raise ValueError(f"Field 'group' in {context} must be >= 1")
+        
+        if "named_groups" in extractor:
+            if not isinstance(extractor["named_groups"], bool):
+                raise ValueError(f"Field 'named_groups' in {context} must be a boolean")
+        
+        # Validate fallback strategy if present
+        if "fallback_strategy" in extractor:
+            valid_strategies = {"original", "null", "empty"}
+            if extractor["fallback_strategy"] not in valid_strategies:
+                raise ValueError(
+                    f"Invalid fallback_strategy '{extractor['fallback_strategy']}' in {context}. "
+                    f"Must be one of: {', '.join(valid_strategies)}"
+                )
 
     def _validate_output(self, output: Dict[str, Any]):
         """Validate output configuration."""

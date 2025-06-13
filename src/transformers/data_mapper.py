@@ -4,6 +4,7 @@ import pandas as pd
 from typing import Dict, Any, List, Optional, Union
 from datetime import datetime, date, time
 import logging
+import re
 
 
 class DataMapper:
@@ -64,21 +65,56 @@ class DataMapper:
                 self.logger.warning(f"Column '{field_name}' not found in DataFrame")
                 continue
 
-            # Apply type conversion
-            try:
-                if field_type in self.TYPE_CONVERTERS:
-                    converter = self.TYPE_CONVERTERS[field_type]
-                    result_df[field_name] = result_df[field_name].apply(
-                        lambda x: self._safe_convert(x, converter)
+            # Apply regex extractor if specified
+            if "extractor" in prop_config and prop_config["extractor"].get("type") == "regex":
+                try:
+                    extracted_data = self._apply_regex_extractor(
+                        result_df[field_name], prop_config["extractor"], field_name
                     )
+                    
+                    # Handle multiple extractions (groups)
+                    if isinstance(extracted_data, dict):
+                        for ext_field, ext_values in extracted_data.items():
+                            result_df[ext_field] = ext_values
+                            # Apply type conversion to extracted fields
+                            if field_type in self.TYPE_CONVERTERS:
+                                converter = self.TYPE_CONVERTERS[field_type]
+                                result_df[ext_field] = result_df[ext_field].apply(
+                                    lambda x: self._safe_convert(x, converter)
+                                )
+                            property_mappings[ext_field] = field_type
+                    else:
+                        # Single extraction - replace original field
+                        result_df[field_name] = extracted_data
+                        # Apply type conversion
+                        if field_type in self.TYPE_CONVERTERS:
+                            converter = self.TYPE_CONVERTERS[field_type]
+                            result_df[field_name] = result_df[field_name].apply(
+                                lambda x: self._safe_convert(x, converter)
+                            )
+                        property_mappings[field_name] = field_type
+                        
+                except Exception as e:
+                    self.logger.error(
+                        f"Error applying regex extractor to field '{field_name}': {e}"
+                    )
+                    continue
+            else:
+                # Apply type conversion without extraction
+                try:
+                    if field_type in self.TYPE_CONVERTERS:
+                        converter = self.TYPE_CONVERTERS[field_type]
+                        result_df[field_name] = result_df[field_name].apply(
+                            lambda x: self._safe_convert(x, converter)
+                        )
 
-                property_mappings[field_name] = field_type
+                    property_mappings[field_name] = field_type
 
-            except Exception as e:
-                self.logger.error(
-                    f"Error converting field '{field_name}' to type '{field_type}': {e}"
-                )
-                continue
+                except Exception as e:
+                    self.logger.error(
+                        f"Error converting field '{field_name}' to type '{field_type}': {e}"
+                    )
+                    continue
 
         self.logger.info(
             f"Mapped {len(property_mappings)} properties for node {node_config['label']}"
@@ -105,21 +141,56 @@ class DataMapper:
                 )
                 continue
 
-            # Apply type conversion
-            try:
-                if field_type in self.TYPE_CONVERTERS:
-                    converter = self.TYPE_CONVERTERS[field_type]
-                    result_df[field_name] = result_df[field_name].apply(
-                        lambda x: self._safe_convert(x, converter)
+            # Apply regex extractor if specified
+            if "extractor" in prop_config and prop_config["extractor"].get("type") == "regex":
+                try:
+                    extracted_data = self._apply_regex_extractor(
+                        result_df[field_name], prop_config["extractor"], field_name
                     )
+                    
+                    # Handle multiple extractions (groups)
+                    if isinstance(extracted_data, dict):
+                        for ext_field, ext_values in extracted_data.items():
+                            result_df[ext_field] = ext_values
+                            # Apply type conversion to extracted fields
+                            if field_type in self.TYPE_CONVERTERS:
+                                converter = self.TYPE_CONVERTERS[field_type]
+                                result_df[ext_field] = result_df[ext_field].apply(
+                                    lambda x: self._safe_convert(x, converter)
+                                )
+                            property_mappings[ext_field] = field_type
+                    else:
+                        # Single extraction - replace original field
+                        result_df[field_name] = extracted_data
+                        # Apply type conversion
+                        if field_type in self.TYPE_CONVERTERS:
+                            converter = self.TYPE_CONVERTERS[field_type]
+                            result_df[field_name] = result_df[field_name].apply(
+                                lambda x: self._safe_convert(x, converter)
+                            )
+                        property_mappings[field_name] = field_type
+                        
+                except Exception as e:
+                    self.logger.error(
+                        f"Error applying regex extractor to relationship field '{field_name}': {e}"
+                    )
+                    continue
+            else:
+                # Apply type conversion without extraction
+                try:
+                    if field_type in self.TYPE_CONVERTERS:
+                        converter = self.TYPE_CONVERTERS[field_type]
+                        result_df[field_name] = result_df[field_name].apply(
+                            lambda x: self._safe_convert(x, converter)
+                        )
 
-                property_mappings[field_name] = field_type
+                    property_mappings[field_name] = field_type
 
-            except Exception as e:
-                self.logger.error(
-                    f"Error converting relationship property '{field_name}': {e}"
-                )
-                continue
+                except Exception as e:
+                    self.logger.error(
+                        f"Error converting relationship property '{field_name}': {e}"
+                    )
+                    continue
 
         self.logger.info(
             f"Mapped {len(property_mappings)} properties for relationship {rel_config['type']}"
@@ -270,3 +341,175 @@ class DataMapper:
                 )
 
         return errors
+
+    def _apply_regex_extractor(
+        self, series: pd.Series, extractor_config: Dict[str, Any], field_name: str
+    ) -> Union[pd.Series, Dict[str, pd.Series]]:
+        """Apply regex extractor to extract values from a pandas Series."""
+        pattern = extractor_config.get("pattern")
+        if not pattern:
+            raise ValueError(f"Regex extractor missing 'pattern' for field '{field_name}'")
+        
+        try:
+            # Compile regex pattern
+            regex = re.compile(pattern)
+        except re.error as e:
+            raise ValueError(f"Invalid regex pattern '{pattern}' for field '{field_name}': {e}")
+        
+        # Determine extraction mode
+        if "groups" in extractor_config:
+            # Multiple group extraction - extract specific groups into named fields
+            return self._extract_multiple_groups(series, regex, extractor_config["groups"], 
+                                               extractor_config.get("fallback_strategy", "original"))
+        elif "group" in extractor_config:
+            # Single group extraction
+            group_num = extractor_config["group"]
+            return self._extract_single_group(series, regex, group_num, 
+                                            extractor_config.get("fallback_strategy", "original"))
+        elif extractor_config.get("named_groups", False):
+            # Extract all named groups
+            return self._extract_named_groups(series, regex, 
+                                            extractor_config.get("fallback_strategy", "original"))
+        else:
+            # Default: extract first group if available, otherwise full match
+            return self._extract_default(series, regex, 
+                                       extractor_config.get("fallback_strategy", "original"))
+
+    def _extract_multiple_groups(
+        self, series: pd.Series, regex: re.Pattern, group_names: List[str], fallback_strategy: str
+    ) -> Dict[str, pd.Series]:
+        """Extract multiple regex groups into separate fields."""
+        result = {}
+        
+        for i, group_name in enumerate(group_names, 1):
+            extracted_values = []
+            
+            for value in series:
+                if pd.isna(value) or value is None:
+                    extracted_values.append(None)
+                    continue
+                    
+                match = regex.search(str(value))
+                if match and len(match.groups()) >= i:
+                    extracted_values.append(match.group(i))
+                else:
+                    # Apply fallback strategy
+                    if fallback_strategy == "original":
+                        extracted_values.append(value)
+                    elif fallback_strategy == "null":
+                        extracted_values.append(None)
+                    elif fallback_strategy == "empty":
+                        extracted_values.append("")
+                    else:
+                        extracted_values.append(value)
+            
+            result[group_name] = pd.Series(extracted_values, index=series.index)
+        
+        return result
+
+    def _extract_single_group(
+        self, series: pd.Series, regex: re.Pattern, group_num: int, fallback_strategy: str
+    ) -> pd.Series:
+        """Extract a single regex group."""
+        extracted_values = []
+        
+        for value in series:
+            if pd.isna(value) or value is None:
+                extracted_values.append(None)
+                continue
+                
+            match = regex.search(str(value))
+            if match and len(match.groups()) >= group_num:
+                extracted_values.append(match.group(group_num))
+            else:
+                # Apply fallback strategy
+                if fallback_strategy == "original":
+                    extracted_values.append(value)
+                elif fallback_strategy == "null":
+                    extracted_values.append(None)
+                elif fallback_strategy == "empty":
+                    extracted_values.append("")
+                else:
+                    extracted_values.append(value)
+        
+        return pd.Series(extracted_values, index=series.index)
+
+    def _extract_named_groups(
+        self, series: pd.Series, regex: re.Pattern, fallback_strategy: str
+    ) -> Dict[str, pd.Series]:
+        """Extract all named groups from regex."""
+        # Get all named groups from the pattern
+        if not regex.groupindex:
+            raise ValueError("No named groups found in regex pattern")
+        
+        result = {}
+        group_names = list(regex.groupindex.keys())
+        
+        for group_name in group_names:
+            extracted_values = []
+            
+            for value in series:
+                if pd.isna(value) or value is None:
+                    extracted_values.append(None)
+                    continue
+                    
+                match = regex.search(str(value))
+                if match:
+                    try:
+                        group_value = match.group(group_name)
+                        extracted_values.append(group_value)
+                    except IndexError:
+                        # Apply fallback strategy
+                        if fallback_strategy == "original":
+                            extracted_values.append(value)
+                        elif fallback_strategy == "null":
+                            extracted_values.append(None)
+                        elif fallback_strategy == "empty":
+                            extracted_values.append("")
+                        else:
+                            extracted_values.append(value)
+                else:
+                    # Apply fallback strategy
+                    if fallback_strategy == "original":
+                        extracted_values.append(value)
+                    elif fallback_strategy == "null":
+                        extracted_values.append(None)
+                    elif fallback_strategy == "empty":
+                        extracted_values.append("")
+                    else:
+                        extracted_values.append(value)
+            
+            result[group_name] = pd.Series(extracted_values, index=series.index)
+        
+        return result
+
+    def _extract_default(
+        self, series: pd.Series, regex: re.Pattern, fallback_strategy: str
+    ) -> pd.Series:
+        """Extract using default strategy (first group if available, otherwise full match)."""
+        extracted_values = []
+        
+        for value in series:
+            if pd.isna(value) or value is None:
+                extracted_values.append(None)
+                continue
+                
+            match = regex.search(str(value))
+            if match:
+                # Use first group if available, otherwise full match
+                if match.groups():
+                    extracted_values.append(match.group(1))
+                else:
+                    extracted_values.append(match.group(0))
+            else:
+                # Apply fallback strategy
+                if fallback_strategy == "original":
+                    extracted_values.append(value)
+                elif fallback_strategy == "null":
+                    extracted_values.append(None)
+                elif fallback_strategy == "empty":
+                    extracted_values.append("")
+                else:
+                    extracted_values.append(value)
+        
+        return pd.Series(extracted_values, index=series.index)
