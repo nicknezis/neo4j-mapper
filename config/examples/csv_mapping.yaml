@@ -1,0 +1,69 @@
+# CSV mapping example - Pure CSV data sources
+# This example shows mapping data from CSV files to graph format
+
+csv_sources:
+  - path: "data/users.csv"
+    alias: "users_csv"
+    options:
+      delimiter: ","
+      encoding: "utf-8"
+      header: true
+  
+  - path: "data/orders.csv"
+    alias: "orders_csv"
+    options:
+      delimiter: ","
+      encoding: "utf-8"
+      header: true
+
+mappings:
+  - name: "csv_users_orders"
+    
+    # JOIN operations between CSV files
+    joins:
+      - type: "INNER"
+        left_table: "users_csv.users"
+        right_table: "orders_csv.orders"
+        on: "users.user_id = orders.user_id"
+    
+    # Node definitions
+    nodes:
+      - label: "User"
+        source: "users"
+        id_field: "user_id"
+        properties:
+          - field: "name"
+            type: "string"
+          - field: "email"
+            type: "string"
+          - field: "age"
+            type: "integer"
+          - field: "registration_date"
+            type: "datetime"
+      
+      - label: "Order"
+        source: "orders"
+        id_field: "order_id"
+        properties:
+          - field: "order_number"
+            type: "string"
+          - field: "order_date"
+            type: "datetime"
+          - field: "total_amount"
+            type: "float"
+          - field: "status"
+            type: "string"
+    
+    # Relationship definitions
+    relationships:
+      - type: "PLACED_ORDER"
+        from_node: "User"
+        to_node: "Order"
+        properties:
+          - field: "order_date"
+            type: "datetime"
+
+# Output configuration
+output:
+  format: "csv"
+  directory: "output"

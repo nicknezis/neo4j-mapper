@@ -1,0 +1,116 @@
+# Mixed data sources example - SQLite databases + CSV files
+# This example shows mapping data from both SQLite and CSV sources
+
+databases:
+  - path: "data/products.db"
+    alias: "products_db"
+
+csv_sources:
+  - path: "data/users.csv"
+    alias: "users_csv"
+    options:
+      delimiter: ","
+      encoding: "utf-8"
+      header: true
+  
+  - path: "data/orders.csv"  
+    alias: "orders_csv"
+    options:
+      delimiter: ","
+      encoding: "utf-8"
+      header: true
+
+mappings:
+  - name: "mixed_ecommerce_graph"
+    
+    # JOIN operations across different data source types
+    joins:
+      - type: "INNER"
+        left_table: "users_csv.users"
+        right_table: "orders_csv.orders"
+        on: "users.user_id = orders.user_id"
+      - type: "LEFT"
+        left_table: "orders_csv.orders"
+        right_table: "products_db.products"
+        on: "orders.product_id = products.id"
+    
+    # Node definitions
+    nodes:
+      - label: "User"
+        source: "users"
+        id_field: "user_id"
+        properties:
+          - field: "name"
+            type: "string"
+          - field: "email"
+            type: "string"
+          - field: "country"
+            type: "string"
+          - field: "registration_date"
+            type: "datetime"
+      
+      - label: "Order"
+        source: "orders"
+        id_field: "order_id"
+        properties:
+          - field: "order_number"
+            type: "string"
+          - field: "order_date"
+            type: "datetime"
+          - field: "total_amount"
+            type: "float"
+          - field: "quantity"
+            type: "integer"
+      
+      - label: "Product"
+        source: "products"
+        id_field: "id"
+        properties:
+          - field: "name"
+            type: "string"
+          - field: "category"
+            type: "string"
+          - field: "price"
+            type: "float"
+          - field: "description"
+            type: "string"
+          - field: "in_stock"
+            type: "boolean"
+    
+    # Relationship definitions
+    relationships:
+      - type: "PLACED_ORDER"
+        from_node: "User"
+        to_node: "Order"
+        properties:
+          - field: "order_date"
+            type: "datetime"
+      
+      - type: "ORDERED_PRODUCT"
+        from_node: "Order"
+        to_node: "Product"
+        properties:
+          - field: "quantity"
+            type: "integer"
+          - field: "unit_price"
+            type: "float"
+
+  # Second mapping for user analytics (CSV only)
+  - name: "user_behavior"
+    
+    nodes:
+      - label: "UserSession"
+        source: "users_csv.users"
+        id_field: "user_id"
+        properties:
+          - field: "last_login"
+            type: "datetime"
+          - field: "session_count"
+            type: "integer"
+          - field: "preferred_device"
+            type: "string"
+
+# Output configuration
+output:
+  format: "all"  # Generate CSV, JSON, and Cypher formats
+  directory: "output"

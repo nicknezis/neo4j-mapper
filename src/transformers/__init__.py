@@ -3,4 +3,4 @@
 from .graph_transformer import GraphTransformer
 from .data_mapper import DataMapper
 
-__all__ = ['GraphTransformer', 'DataMapper']
+__all__ = ["GraphTransformer", "DataMapper"]

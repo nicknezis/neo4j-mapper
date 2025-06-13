@@ -3,4 +3,4 @@
 from .config_loader import ConfigLoader
 from .validator import ConfigValidator
 
-__all__ = ['ConfigLoader', 'ConfigValidator']
+__all__ = ["ConfigLoader", "ConfigValidator"]

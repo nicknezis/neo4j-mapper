@@ -4,4 +4,4 @@ from .csv_formatter import CSVFormatter
 from .json_formatter import JSONFormatter
 from .cypher_formatter import CypherFormatter
 
-__all__ = ['CSVFormatter', 'JSONFormatter', 'CypherFormatter']
+__all__ = ["CSVFormatter", "JSONFormatter", "CypherFormatter"]
