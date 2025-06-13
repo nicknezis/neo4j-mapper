@@ -1,0 +1,133 @@
+# Multi-database mapping example
+# This example shows how to map data from multiple separate databases
+
+databases:
+  - path: "data/hr_system.db"
+    alias: "hr"
+  - path: "data/project_management.db"
+    alias: "pm"
+  - path: "data/time_tracking.db"
+    alias: "time"
+
+mappings:
+  - name: "employee_projects"
+    
+    # Complex JOIN across multiple databases
+    joins:
+      - type: "INNER"
+        left_table: "hr.employees"
+        right_table: "pm.project_assignments"
+        on: "employees.employee_id = project_assignments.employee_id"
+      - type: "INNER"
+        left_table: "pm.project_assignments"
+        right_table: "pm.projects"
+        on: "project_assignments.project_id = projects.project_id"
+      - type: "LEFT"
+        left_table: "pm.project_assignments"
+        right_table: "time.time_entries"
+        on: "project_assignments.assignment_id = time_entries.assignment_id"
+    
+    nodes:
+      - label: "Employee"
+        source: "employees"
+        id_field: "employee_id"
+        properties:
+          - field: "first_name"
+            type: "string"
+          - field: "last_name"
+            type: "string"
+          - field: "email"
+            type: "string"
+          - field: "department"
+            type: "string"
+          - field: "hire_date"
+            type: "date"
+          - field: "salary"
+            type: "float"
+        computed_properties:
+          - name: "full_name"
+            type: "string"
+            expression: "CONCAT(first_name, ' ', last_name)"
+          - name: "years_employed"
+            type: "integer"
+            expression: "YEAR(CURRENT_DATE) - YEAR(hire_date)"
+      
+      - label: "Project"
+        source: "projects"
+        id_field: "project_id"
+        properties:
+          - field: "project_name"
+            type: "string"
+          - field: "description"
+            type: "string"
+          - field: "start_date"
+            type: "date"
+          - field: "end_date"
+            type: "date"
+          - field: "budget"
+            type: "float"
+          - field: "status"
+            type: "string"
+      
+      - label: "Department"
+        source: "employees"
+        id_field: "department"
+        properties:
+          - field: "department"
+            type: "string"
+    
+    relationships:
+      - type: "ASSIGNED_TO"
+        from_node: "Employee"
+        to_node: "Project"
+        properties:
+          - field: "assignment_date"
+            type: "date"
+          - field: "role"
+            type: "string"
+          - field: "allocation_percentage"
+            type: "float"
+      
+      - type: "WORKS_IN"
+        from_node: "Employee"
+        to_node: "Department"
+      
+      - type: "LOGGED_TIME"
+        from_node: "Employee"
+        to_node: "Project"
+        properties:
+          - field: "hours_logged"
+            type: "float"
+          - field: "entry_date"
+            type: "date"
+          - field: "task_description"
+            type: "string"
+
+  # Separate mapping for organizational structure
+  - name: "org_structure"
+    
+    nodes:
+      - label: "Manager"
+        source: "hr.employees"
+        id_field: "employee_id"
+        properties:
+          - field: "first_name"
+            type: "string"
+          - field: "last_name"
+            type: "string"
+          - field: "management_level"
+            type: "string"
+        # Filter to only include managers
+        where_clause: "is_manager = 1"
+    
+    relationships:
+      - type: "REPORTS_TO"
+        from_node: "Employee"
+        to_node: "Manager"
+        properties:
+          - field: "reporting_start_date"
+            type: "date"
+
+output:
+  format: "csv"
+  directory: "output/multi_database"

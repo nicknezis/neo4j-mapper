@@ -1,0 +1,29 @@
+# Simple mapping example - Single database, single table
+# This example shows a basic user table mapping to User nodes
+
+databases:
+  - path: "data/users.db"
+    alias: "users_db"
+
+mappings:
+  - name: "simple_users"
+    
+    nodes:
+      - label: "User"
+        source: "users"
+        id_field: "id"
+        properties:
+          - field: "name"
+            type: "string"
+          - field: "email"
+            type: "string"
+          - field: "age"
+            type: "integer"
+          - field: "created_at"
+            type: "datetime"
+          - field: "is_active"
+            type: "boolean"
+
+output:
+  format: "csv"
+  directory: "output"

@@ -1,0 +1,123 @@
+# Complex mapping example with JOINs
+# This example shows mapping data from multiple tables with relationships
+
+databases:
+  - path: "data/ecommerce.db"
+    alias: "ecommerce"
+  - path: "data/analytics.db"
+    alias: "analytics"
+
+mappings:
+  - name: "ecommerce_graph"
+    
+    # JOIN operations to combine data from multiple tables
+    joins:
+      - type: "INNER"
+        left_table: "ecommerce.users"
+        right_table: "ecommerce.orders"
+        on: "users.id = orders.user_id"
+      - type: "LEFT"
+        left_table: "ecommerce.orders"
+        right_table: "ecommerce.order_items"
+        on: "orders.id = order_items.order_id"
+      - type: "INNER"
+        left_table: "ecommerce.order_items"
+        right_table: "ecommerce.products"
+        on: "order_items.product_id = products.id"
+    
+    # Node definitions
+    nodes:
+      - label: "User"
+        source: "users"
+        id_field: "id"
+        properties:
+          - field: "name"
+            type: "string"
+          - field: "email"
+            type: "string"
+          - field: "registration_date"
+            type: "datetime"
+          - field: "country"
+            type: "string"
+        # Computed properties example
+        computed_properties:
+          - name: "display_name"
+            type: "string"
+            expression: "UPPER(name)"
+          - name: "user_code"
+            type: "string"
+            expression: "CONCAT('USER_', id)"
+      
+      - label: "Order"
+        source: "orders"
+        id_field: "id"
+        properties:
+          - field: "order_number"
+            type: "string"
+          - field: "order_date"
+            type: "datetime"
+          - field: "total_amount"
+            type: "float"
+          - field: "status"
+            type: "string"
+      
+      - label: "Product"
+        source: "products"
+        id_field: "id"
+        properties:
+          - field: "name"
+            type: "string"
+          - field: "category"
+            type: "string"
+          - field: "price"
+            type: "float"
+          - field: "description"
+            type: "string"
+    
+    # Relationship definitions
+    relationships:
+      - type: "PLACED_ORDER"
+        from_node: "User"
+        to_node: "Order"
+        properties:
+          - field: "order_date"
+            type: "datetime"
+      
+      - type: "CONTAINS"
+        from_node: "Order"
+        to_node: "Product"
+        properties:
+          - field: "quantity"
+            type: "integer"
+          - field: "unit_price"
+            type: "float"
+
+  # Second mapping for analytics data
+  - name: "user_analytics"
+    
+    nodes:
+      - label: "UserSession"
+        source: "analytics.user_sessions"
+        id_field: "session_id"
+        properties:
+          - field: "user_id"
+            type: "string"
+          - field: "start_time"
+            type: "datetime"
+          - field: "end_time"
+            type: "datetime"
+          - field: "page_views"
+            type: "integer"
+          - field: "device_type"
+            type: "string"
+    
+    relationships:
+      - type: "HAD_SESSION"
+        from_node: "User"
+        to_node: "UserSession"
+        # Note: This would require the User nodes to be created first
+        # or use a post-processing step to link across mappings
+
+output:
+  format: "all"  # Generate CSV, JSON, and Cypher formats
+  directory: "output"

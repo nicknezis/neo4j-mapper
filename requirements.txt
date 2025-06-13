@@ -1,0 +1,19 @@
+# Neo4j Mapper Dependencies
+
+# Core dependencies
+pandas>=1.5.0
+PyYAML>=6.0
+click>=8.0.0
+jsonschema>=4.0.0
+
+# Optional dependencies for enhanced functionality
+# Uncomment if needed:
+# python-dateutil>=2.8.0  # For advanced date parsing
+# numpy>=1.21.0          # For numerical operations (pandas dependency)
+
+# Development dependencies (install with: pip install -r requirements-dev.txt)
+# pytest>=7.0.0
+# pytest-cov>=4.0.0
+# black>=22.0.0
+# flake8>=5.0.0
+# mypy>=0.991
