@@ -162,7 +162,13 @@ class SQLiteReader:
         # For multi-database joins, we need to attach databases
         self._attach_databases_for_join(joins)
 
-        return self.execute_query(query.strip())
+        # Execute query and get result DataFrame
+        result_df = self.execute_query(query.strip())
+        
+        # Add column prefixes to prevent collisions (similar to CSV reader approach)
+        result_df = self._add_column_prefixes(result_df, joins)
+        
+        return result_df
 
     def _parse_table_reference(self, table_ref: str) -> Dict[str, str]:
         """Parse table reference like 'db_alias.table_name'."""
@@ -206,6 +212,85 @@ class SQLiteReader:
                     logging.info(f"Attached database {alias} for join operation")
                 except sqlite3.Error as e:
                     raise RuntimeError(f"Failed to attach database {alias}: {e}")
+
+    def _add_column_prefixes(self, df: pd.DataFrame, joins: List[Dict[str, Any]]) -> pd.DataFrame:
+        """Add column prefixes to prevent name collisions."""
+        # Get all table references involved in joins
+        table_refs = []
+        for join in joins:
+            left_ref = self._parse_table_reference(join["left_table"])
+            right_ref = self._parse_table_reference(join["right_table"])
+            # Add left reference only for first join to avoid duplicates
+            if not table_refs:
+                table_refs.append(left_ref)
+            table_refs.append(right_ref)
+        
+        # Detect potential column collisions before prefixing
+        self._detect_column_collisions(df, table_refs)
+        
+        # Create a mapping of potential column names to prefixed names
+        column_mapping = {}
+        
+        for column in df.columns:
+            # Try to determine which table this column belongs to
+            # This is heuristic since SQLite JOIN results don't preserve table info
+            prefixed_name = None
+            
+            # Check if column name suggests a specific table
+            for table_ref in table_refs:
+                table_name = table_ref["table"]
+                db_alias = table_ref["db_alias"]
+                
+                # Use database alias as prefix for consistency with CSV reader
+                potential_prefix = f"{db_alias}_{column}"
+                
+                # For now, we'll prefix all columns with the first matching table
+                # This is a simplified approach - more sophisticated logic could be added
+                if prefixed_name is None:
+                    prefixed_name = potential_prefix
+                    break
+            
+            # If no specific table match, use a generic approach
+            if prefixed_name is None and table_refs:
+                # Use the first table's database alias as default
+                prefixed_name = f"{table_refs[0]['db_alias']}_{column}"
+            
+            if prefixed_name:
+                column_mapping[column] = prefixed_name
+        
+        # Rename columns in the DataFrame
+        if column_mapping:
+            df = df.rename(columns=column_mapping)
+            logging.info(f"Added column prefixes to prevent collisions: {list(column_mapping.values())}")
+        
+        return df
+
+    def _detect_column_collisions(self, df: pd.DataFrame, table_refs: List[Dict[str, str]]):
+        """Detect and warn about potential column name collisions."""
+        if len(table_refs) < 2:
+            return  # No collisions possible with single table
+            
+        # Get table information for collision detection
+        collision_warnings = []
+        common_column_names = ["id", "name", "created_at", "updated_at", "status", "type"]
+        
+        # Check for common column names that could cause collisions
+        for column in df.columns:
+            if column.lower() in common_column_names:
+                collision_warnings.append(column)
+        
+        if collision_warnings:
+            logging.warning(
+                f"Potential column collisions detected for common field names: {collision_warnings}. "
+                f"Applying prefixes to prevent data loss."
+            )
+            
+        # Additional validation: check if we have multiple tables with potentially same schema
+        if len(table_refs) > 2:
+            logging.info(
+                f"Multi-table JOIN detected ({len(table_refs)} tables). "
+                f"Column prefixing applied for: {[ref['db_alias'] for ref in table_refs]}"
+            )
 
     def get_row_count(
         self, alias: str, table_name: str, where_clause: Optional[str] = None

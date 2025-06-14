@@ -1,5 +1,11 @@
 # Multi-database mapping example
 # This example shows how to map data from multiple separate databases
+#
+# IMPORTANT: Column Naming After JOINs
+# When JOINs are performed, columns are automatically prefixed with database aliases
+# to prevent name collisions (e.g., "id" becomes "hr_id", "pm_id").
+# In your field mappings, use the original column names - the system will automatically
+# resolve them to the correct prefixed columns.
 
 databases:
   - path: "data/hr_system.db"

@@ -38,28 +38,16 @@ class DataMapper:
             field_name = prop_config["field"]
             field_type = prop_config["type"]
 
-            # Handle source prefix if needed
-            if source and "." in source:
-                # For joined tables, might need to handle prefixed columns
-                possible_columns = [
-                    field_name,
-                    f"{source}.{field_name}",
-                    f"{source}_{field_name}",
-                ]
+            # Handle source prefix if needed - prioritize database alias prefixes
+            actual_column = self._resolve_column_name(df, field_name, source)
+            
+            if actual_column is None:
+                self.logger.warning(
+                    f"Column '{field_name}' not found in DataFrame for node {node_config['label']}"
+                )
+                continue
 
-                actual_column = None
-                for col in possible_columns:
-                    if col in df.columns:
-                        actual_column = col
-                        break
-
-                if actual_column is None:
-                    self.logger.warning(
-                        f"Column '{field_name}' not found in DataFrame for node {node_config['label']}"
-                    )
-                    continue
-
-                field_name = actual_column
+            field_name = actual_column
 
             if field_name not in df.columns:
                 self.logger.warning(f"Column '{field_name}' not found in DataFrame")
@@ -135,11 +123,16 @@ class DataMapper:
             field_name = prop_config["field"]
             field_type = prop_config["type"]
 
-            if field_name not in df.columns:
+            # Resolve column name using the same logic as nodes
+            actual_column = self._resolve_column_name(df, field_name, "")
+            
+            if actual_column is None:
                 self.logger.warning(
                     f"Column '{field_name}' not found in DataFrame for relationship"
                 )
                 continue
+                
+            field_name = actual_column
 
             # Apply regex extractor if specified
             if "extractor" in prop_config and prop_config["extractor"].get("type") == "regex":
@@ -201,28 +194,36 @@ class DataMapper:
         self, df: pd.DataFrame, node_config: Dict[str, Any]
     ) -> pd.DataFrame:
         """Extract node data with unique IDs and properties."""
-        # Get ID field
+        # Get source for column resolution
+        source = node_config.get("source", "")
+        
+        # Resolve ID field
         id_field = node_config["id_field"]
-
-        if id_field not in df.columns:
+        resolved_id_field = self._resolve_column_name(df, id_field, source)
+        
+        if resolved_id_field is None:
             raise ValueError(f"ID field '{id_field}' not found in DataFrame")
 
-        # Get property fields
-        property_fields = [prop["field"] for prop in node_config["properties"]]
+        # Resolve property fields
+        property_fields = []
+        for prop in node_config["properties"]:
+            resolved_field = self._resolve_column_name(df, prop["field"], source)
+            if resolved_field:
+                property_fields.append(resolved_field)
 
         # Select relevant columns
-        columns_to_select = [id_field] + [f for f in property_fields if f in df.columns]
+        columns_to_select = [resolved_id_field] + property_fields
 
         if not columns_to_select:
             raise ValueError(f"No valid columns found for node {node_config['label']}")
 
         # Extract unique nodes
-        node_df = df[columns_to_select].drop_duplicates(subset=[id_field])
+        node_df = df[columns_to_select].drop_duplicates(subset=[resolved_id_field])
 
         # Add node label
         node_df = node_df.copy()
         node_df["_label"] = node_config["label"]
-        node_df["_id"] = node_df[id_field]
+        node_df["_id"] = node_df[resolved_id_field]
 
         self.logger.info(
             f"Extracted {len(node_df)} unique nodes for label {node_config['label']}"
@@ -251,25 +252,39 @@ class DataMapper:
                 f"Could not find node configurations for relationship {rel_config['type']}"
             )
 
+        # Resolve ID fields using node sources
+        from_source = from_node_config.get("source", "")
+        to_source = to_node_config.get("source", "")
+        
         from_id_field = from_node_config["id_field"]
         to_id_field = to_node_config["id_field"]
+        
+        resolved_from_id = self._resolve_column_name(df, from_id_field, from_source)
+        resolved_to_id = self._resolve_column_name(df, to_id_field, to_source)
+        
+        if resolved_from_id is None:
+            raise ValueError(f"From ID field '{from_id_field}' not found in DataFrame")
+        if resolved_to_id is None:
+            raise ValueError(f"To ID field '{to_id_field}' not found in DataFrame")
 
         # Select relationship columns
-        columns_to_select = [from_id_field, to_id_field]
+        columns_to_select = [resolved_from_id, resolved_to_id]
 
         # Add relationship properties if specified
         if "properties" in rel_config:
-            rel_properties = [prop["field"] for prop in rel_config["properties"]]
-            columns_to_select.extend([f for f in rel_properties if f in df.columns])
+            for prop in rel_config["properties"]:
+                resolved_prop = self._resolve_column_name(df, prop["field"], "")
+                if resolved_prop:
+                    columns_to_select.append(resolved_prop)
 
         # Extract relationships
         rel_df = df[columns_to_select].copy()
-        rel_df = rel_df.dropna(subset=[from_id_field, to_id_field])
+        rel_df = rel_df.dropna(subset=[resolved_from_id, resolved_to_id])
 
         # Add relationship metadata
         rel_df["_type"] = rel_config["type"]
-        rel_df["_from_id"] = rel_df[from_id_field]
-        rel_df["_to_id"] = rel_df[to_id_field]
+        rel_df["_from_id"] = rel_df[resolved_from_id]
+        rel_df["_to_id"] = rel_df[resolved_to_id]
 
         self.logger.info(
             f"Extracted {len(rel_df)} relationships of type {rel_config['type']}"
@@ -434,6 +449,46 @@ class DataMapper:
         
         return pd.Series(extracted_values, index=series.index)
 
+    def _resolve_column_name(self, df: pd.DataFrame, field_name: str, source: str = "") -> Optional[str]:
+        """Resolve field name to actual DataFrame column, prioritizing database alias prefixes."""
+        # Create list of possible column names in priority order
+        possible_columns = []
+        
+        # If source is provided, try various prefix patterns
+        if source:
+            if "." in source:
+                # Source like "hr.employees" - extract database alias
+                db_alias = source.split(".")[0]
+                possible_columns.extend([
+                    f"{db_alias}_{field_name}",    # Highest priority: db_alias_field
+                    f"{source}_{field_name}",      # db_alias.table_field  
+                    f"{source}.{field_name}",      # db_alias.table.field
+                ])
+            else:
+                # Simple source name
+                possible_columns.extend([
+                    f"{source}_{field_name}",      # source_field
+                    f"{source}.{field_name}",      # source.field
+                ])
+        
+        # Add database alias prefixed versions by scanning existing columns
+        # This handles cases where we don't know the source but columns are prefixed
+        for col in df.columns:
+            if col.endswith(f"_{field_name}") and col not in possible_columns:
+                possible_columns.append(col)
+        
+        # Add original field name as fallback
+        possible_columns.append(field_name)
+        
+        # Find first matching column
+        for col in possible_columns:
+            if col in df.columns:
+                if col != field_name:
+                    self.logger.debug(f"Resolved field '{field_name}' to column '{col}'")
+                return col
+        
+        return None
+
     def _extract_named_groups(
         self, series: pd.Series, regex: re.Pattern, fallback_strategy: str
     ) -> Dict[str, pd.Series]:
@@ -513,3 +568,43 @@ class DataMapper:
                     extracted_values.append(value)
         
         return pd.Series(extracted_values, index=series.index)
+
+    def _resolve_column_name(self, df: pd.DataFrame, field_name: str, source: str = "") -> Optional[str]:
+        """Resolve field name to actual DataFrame column, prioritizing database alias prefixes."""
+        # Create list of possible column names in priority order
+        possible_columns = []
+        
+        # If source is provided, try various prefix patterns
+        if source:
+            if "." in source:
+                # Source like "hr.employees" - extract database alias
+                db_alias = source.split(".")[0]
+                possible_columns.extend([
+                    f"{db_alias}_{field_name}",    # Highest priority: db_alias_field
+                    f"{source}_{field_name}",      # db_alias.table_field  
+                    f"{source}.{field_name}",      # db_alias.table.field
+                ])
+            else:
+                # Simple source name
+                possible_columns.extend([
+                    f"{source}_{field_name}",      # source_field
+                    f"{source}.{field_name}",      # source.field
+                ])
+        
+        # Add database alias prefixed versions by scanning existing columns
+        # This handles cases where we don't know the source but columns are prefixed
+        for col in df.columns:
+            if col.endswith(f"_{field_name}") and col not in possible_columns:
+                possible_columns.append(col)
+        
+        # Add original field name as fallback
+        possible_columns.append(field_name)
+        
+        # Find first matching column
+        for col in possible_columns:
+            if col in df.columns:
+                if col != field_name:
+                    self.logger.debug(f"Resolved field '{field_name}' to column '{col}'")
+                return col
+        
+        return None
