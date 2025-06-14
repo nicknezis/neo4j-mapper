@@ -148,7 +148,7 @@ class SQLiteReader:
         SELECT {select_clause}
         FROM {left_table['table']} as {left_table['alias']}
         {first_join['type']} JOIN {right_table['table']} as {right_table['alias']}
-        ON {first_join['on']}
+        ON {first_join['condition']}
         """
 
         # Add additional joins
@@ -156,7 +156,7 @@ class SQLiteReader:
             right_table = self._parse_table_reference(join["right_table"])
             query += f"""
             {join['type']} JOIN {right_table['table']} as {right_table['alias']}
-            ON {join['on']}
+            ON {join['condition']}
             """
 
         # For multi-database joins, we need to attach databases

@@ -1,0 +1,145 @@
+# WHERE clause filtering example
+# This example demonstrates how to use WHERE clauses to filter nodes and relationships
+
+databases:
+  - path: "data/ecommerce.db"
+    alias: "ecommerce"
+
+mappings:
+  - name: "filtered_ecommerce_graph"
+    
+    # Simple JOIN operation
+    joins:
+      - type: "INNER"
+        left_table: "ecommerce.users"
+        right_table: "ecommerce.orders"
+        condition: "users.id = orders.user_id"
+      - type: "LEFT"
+        left_table: "ecommerce.orders"
+        right_table: "ecommerce.order_items"
+        condition: "orders.id = order_items.order_id"
+    
+    # Node definitions with WHERE clause filtering
+    nodes:
+      # Only include active users who have placed orders
+      - label: "ActiveUser"
+        source: "users"
+        id_field: "id"
+        where: "is_active = true AND total_orders > 0"
+        properties:
+          - field: "name"
+            type: "string"
+          - field: "email"
+            type: "string"
+          - field: "country"
+            type: "string"
+          - field: "registration_date"
+            type: "datetime"
+          - field: "total_orders"
+            type: "integer"
+      
+      # Only include orders from the last year with value > $50
+      - label: "RecentOrder"
+        source: "orders"
+        id_field: "id"
+        where: "order_date >= '2023-01-01' AND total_amount > 50.0"
+        properties:
+          - field: "order_number"
+            type: "string"
+          - field: "order_date"
+            type: "datetime"
+          - field: "total_amount"
+            type: "float"
+          - field: "status"
+            type: "string"
+      
+      # Only include high-value order items
+      - label: "HighValueItem"
+        source: "order_items"
+        id_field: "id"
+        where: "quantity * unit_price >= 100.0"
+        properties:
+          - field: "product_name"
+            type: "string"
+          - field: "quantity"
+            type: "integer"
+          - field: "unit_price"
+            type: "float"
+    
+    # Relationship definitions with WHERE clause filtering
+    relationships:
+      # Only include relationships for successful orders
+      - type: "PLACED_ORDER"
+        from_node: "ActiveUser"
+        to_node: "RecentOrder"
+        where: "status = 'completed' OR status = 'shipped'"
+        properties:
+          - field: "order_date"
+            type: "datetime"
+          - field: "status"
+            type: "string"
+      
+      # Only include relationships for items with quantity > 1
+      - type: "CONTAINS_ITEM"
+        from_node: "RecentOrder"
+        to_node: "HighValueItem"
+        where: "quantity > 1"
+        properties:
+          - field: "quantity"
+            type: "integer"
+
+  # Second mapping showing different WHERE clause examples
+  - name: "user_analytics_filtered"
+    
+    nodes:
+      # Filter users by registration date range
+      - label: "NewUser"
+        source: "ecommerce.users"
+        id_field: "id"
+        where: "registration_date BETWEEN '2023-01-01' AND '2023-12-31'"
+        properties:
+          - field: "name"
+            type: "string"
+          - field: "email"
+            type: "string"
+          - field: "registration_date"
+            type: "datetime"
+      
+      # Filter users by country using IN operator
+      - label: "EuropeanUser"
+        source: "ecommerce.users"
+        id_field: "id"
+        where: "country IN ('Germany', 'France', 'Italy', 'Spain')"
+        properties:
+          - field: "name"
+            type: "string"
+          - field: "country"
+            type: "string"
+      
+      # Filter users using LIKE operator for email domains
+      - label: "CorporateUser"
+        source: "ecommerce.users"
+        id_field: "id"
+        where: "email LIKE '%@company.com' OR email LIKE '%@corp.%'"
+        properties:
+          - field: "name"
+            type: "string"
+          - field: "email"
+            type: "string"
+      
+      # Filter using NULL checks
+      - label: "CompleteProfile"
+        source: "ecommerce.users"
+        id_field: "id"
+        where: "phone IS NOT NULL AND address IS NOT NULL"
+        properties:
+          - field: "name"
+            type: "string"
+          - field: "phone"
+            type: "string"
+          - field: "address"
+            type: "string"
+
+output:
+  format: "csv"
+  directory: "output"

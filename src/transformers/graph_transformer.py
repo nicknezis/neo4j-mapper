@@ -58,8 +58,16 @@ class GraphTransformer:
         self, df: pd.DataFrame, node_config: Dict[str, Any]
     ) -> pd.DataFrame:
         """Transform data for a single node type."""
+        # Apply WHERE clause filtering if specified
+        filtered_df = df
+        if "where" in node_config:
+            filtered_df = self._apply_where_filter(df, node_config["where"], node_config.get("source", ""))
+            self.logger.info(
+                f"Applied WHERE filter to node {node_config['label']}: {len(df)} -> {len(filtered_df)} records"
+            )
+
         # Map properties according to configuration
-        mapped_df = self.data_mapper.map_node_properties(df, node_config)
+        mapped_df = self.data_mapper.map_node_properties(filtered_df, node_config)
 
         # Extract unique node data
         node_df = self.data_mapper.extract_node_data(mapped_df, node_config)
@@ -79,8 +87,16 @@ class GraphTransformer:
         node_configs: List[Dict[str, Any]],
     ) -> pd.DataFrame:
         """Transform data for a single relationship type."""
+        # Apply WHERE clause filtering if specified
+        filtered_df = df
+        if "where" in rel_config:
+            filtered_df = self._apply_where_filter(df, rel_config["where"], "")
+            self.logger.info(
+                f"Applied WHERE filter to relationship {rel_config['type']}: {len(df)} -> {len(filtered_df)} records"
+            )
+
         # Map relationship properties
-        mapped_df = self.data_mapper.map_relationship_properties(df, rel_config)
+        mapped_df = self.data_mapper.map_relationship_properties(filtered_df, rel_config)
 
         # Extract relationship data
         rel_df = self.data_mapper.extract_relationship_data(
@@ -303,3 +319,135 @@ class GraphTransformer:
         stats["totals"]["relationship_types"] = len(stats["relationships"])
 
         return stats
+
+    def _apply_where_filter(
+        self, df: pd.DataFrame, where_clause: str, source: str = ""
+    ) -> pd.DataFrame:
+        """Apply WHERE clause filtering to a DataFrame."""
+        if not where_clause or not where_clause.strip():
+            return df
+        
+        try:
+            # Use pandas query method for filtering
+            # Convert SQL-style column references to pandas-compatible ones
+            pandas_query = self._convert_where_to_pandas_query(df, where_clause, source)
+            
+            if pandas_query:
+                filtered_df = df.query(pandas_query)
+                self.logger.debug(f"Applied WHERE filter: '{where_clause}' -> '{pandas_query}'")
+                return filtered_df
+            else:
+                self.logger.warning(f"Could not convert WHERE clause to pandas query: {where_clause}")
+                return df
+                
+        except Exception as e:
+            self.logger.error(f"Error applying WHERE filter '{where_clause}': {e}")
+            # Return original DataFrame if filtering fails
+            return df
+
+    def _convert_where_to_pandas_query(
+        self, df: pd.DataFrame, where_clause: str, source: str = ""
+    ) -> Optional[str]:
+        """Convert SQL WHERE clause to pandas query syntax."""
+        try:
+            # Resolve column names in the WHERE clause using the same logic as DataMapper
+            resolved_query = where_clause
+            
+            # Find potential column references and resolve them
+            import re
+            
+            # Match word boundaries to find potential column names
+            # This is a simplified approach - more sophisticated parsing could be added
+            words = re.findall(r'\b[a-zA-Z_][a-zA-Z0-9_]*\b', where_clause)
+            
+            # Track which words we've already processed to avoid double-wrapping
+            processed_words = set()
+            
+            for word in words:
+                # Skip SQL keywords and operators
+                if word.upper() in {'AND', 'OR', 'NOT', 'IN', 'LIKE', 'IS', 'NULL', 'TRUE', 'FALSE', 
+                                   'BETWEEN', 'EXISTS', 'ANY', 'ALL', 'SOME', 'ASC', 'DESC'}:
+                    continue
+                
+                # Skip if we've already processed this word
+                if word in processed_words:
+                    continue
+                
+                # Try to resolve the column name
+                resolved_col = self.data_mapper._resolve_column_name(df, word, source)
+                if resolved_col and resolved_col != word:
+                    # Replace the column reference in the query
+                    # Use word boundaries to avoid partial replacements
+                    pattern = r'\b' + re.escape(word) + r'\b'
+                    resolved_query = re.sub(pattern, f"`{resolved_col}`", resolved_query)
+                    processed_words.add(word)
+                elif word in df.columns:
+                    # Column exists as-is, but wrap in backticks for pandas query
+                    pattern = r'\b' + re.escape(word) + r'\b'
+                    resolved_query = re.sub(pattern, f"`{word}`", resolved_query)
+                    processed_words.add(word)
+            
+            # Convert SQL operators to pandas query syntax
+            # Handle basic SQL to pandas conversions
+            resolved_query = resolved_query.replace(' = ', ' == ')
+            resolved_query = resolved_query.replace('!=', '!=')  # Already correct
+            resolved_query = resolved_query.replace('<>', '!=')  # SQL alternative for !=
+            
+            # Convert SQL boolean literals to Python boolean literals
+            resolved_query = re.sub(r'\btrue\b', 'True', resolved_query, flags=re.IGNORECASE)
+            resolved_query = re.sub(r'\bfalse\b', 'False', resolved_query, flags=re.IGNORECASE)
+            
+            # Convert SQL logical operators to Python logical operators
+            resolved_query = re.sub(r'\bAND\b', 'and', resolved_query, flags=re.IGNORECASE)
+            resolved_query = re.sub(r'\bOR\b', 'or', resolved_query, flags=re.IGNORECASE)
+            resolved_query = re.sub(r'\bNOT\b', 'not', resolved_query, flags=re.IGNORECASE)
+            
+            # Handle IS NULL / IS NOT NULL
+            resolved_query = re.sub(r'`([^`]+)`\s+IS\s+NULL', r'\1.isnull()', resolved_query, flags=re.IGNORECASE)
+            resolved_query = re.sub(r'`([^`]+)`\s+IS\s+NOT\s+NULL', r'\1.notnull()', resolved_query, flags=re.IGNORECASE)
+            
+            # Handle LIKE operator (convert to string contains - simplified)
+            def convert_like(match):
+                column = match.group(1)
+                pattern = match.group(2).strip("'\"")
+                if pattern.startswith('%') and pattern.endswith('%'):
+                    # Contains
+                    search_term = pattern[1:-1]
+                    return f"{column}.str.contains('{search_term}', na=False)"
+                elif pattern.startswith('%'):
+                    # Ends with
+                    search_term = pattern[1:]
+                    return f"{column}.str.endswith('{search_term}', na=False)"
+                elif pattern.endswith('%'):
+                    # Starts with
+                    search_term = pattern[:-1]
+                    return f"{column}.str.startswith('{search_term}', na=False)"
+                else:
+                    # Exact match
+                    return f"{column} == '{pattern}'"
+            
+            resolved_query = re.sub(
+                r'`([^`]+)`\s+LIKE\s+([\'"][^\'\"]*[\'"])', 
+                convert_like, 
+                resolved_query, 
+                flags=re.IGNORECASE
+            )
+            
+            # Handle IN operator
+            def convert_in(match):
+                column = match.group(1)
+                values = match.group(2)
+                return f"{column}.isin([{values}])"
+            
+            resolved_query = re.sub(
+                r'`([^`]+)`\s+IN\s*\(([^)]+)\)', 
+                convert_in, 
+                resolved_query, 
+                flags=re.IGNORECASE
+            )
+            
+            return resolved_query
+            
+        except Exception as e:
+            self.logger.error(f"Error converting WHERE clause '{where_clause}': {e}")
+            return None

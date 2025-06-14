@@ -28,11 +28,11 @@ mappings:
       - type: "INNER"
         left_table: "users_csv.users"
         right_table: "orders_csv.orders"
-        on: "users.user_id = orders.user_id"
+        condition: "users.user_id = orders.user_id"
       - type: "LEFT"
         left_table: "orders_csv.orders"
         right_table: "products_db.products"
-        on: "orders.product_id = products.id"
+        condition: "orders.product_id = products.id"
     
     # Node definitions
     nodes:

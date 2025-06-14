@@ -156,7 +156,7 @@ class ConfigValidator:
             "type": str,
             "left_table": str,
             "right_table": str,
-            "on": str,
+            "condition": str,
         }
 
         self._validate_required_fields(join, required_fields, context)
@@ -174,6 +174,10 @@ class ConfigValidator:
         # Validate properties
         for i, prop in enumerate(node["properties"]):
             self._validate_property(prop, f"{context}.properties[{i}]")
+        
+        # Validate WHERE clause if present
+        if "where" in node:
+            self._validate_where_clause(node["where"], f"{context}.where")
 
     def _validate_property(self, prop: Dict[str, Any], context: str):
         """Validate property configuration."""
@@ -199,6 +203,10 @@ class ConfigValidator:
         if "properties" in rel:
             for i, prop in enumerate(rel["properties"]):
                 self._validate_property(prop, f"{context}.properties[{i}]")
+        
+        # Validate WHERE clause if present
+        if "where" in rel:
+            self._validate_where_clause(rel["where"], f"{context}.where")
 
     def _validate_extractor(self, extractor: Dict[str, Any], context: str):
         """Validate extractor configuration."""
@@ -262,6 +270,36 @@ class ConfigValidator:
                 raise ValueError(
                     f"Invalid fallback_strategy '{extractor['fallback_strategy']}' in {context}. "
                     f"Must be one of: {', '.join(valid_strategies)}"
+                )
+
+    def _validate_where_clause(self, where_clause: str, context: str):
+        """Validate WHERE clause configuration."""
+        if not isinstance(where_clause, str):
+            raise ValueError(f"WHERE clause in {context} must be a string")
+        
+        if not where_clause.strip():
+            raise ValueError(f"WHERE clause in {context} cannot be empty")
+        
+        # Basic syntax validation - check for balanced parentheses
+        paren_count = 0
+        for char in where_clause:
+            if char == '(':
+                paren_count += 1
+            elif char == ')':
+                paren_count -= 1
+                if paren_count < 0:
+                    raise ValueError(f"Unmatched closing parenthesis in WHERE clause: {context}")
+        
+        if paren_count != 0:
+            raise ValueError(f"Unmatched parentheses in WHERE clause: {context}")
+        
+        # Check for potentially dangerous SQL keywords
+        dangerous_keywords = ['drop', 'delete', 'insert', 'update', 'create', 'alter', 'truncate']
+        where_lower = where_clause.lower()
+        for keyword in dangerous_keywords:
+            if f' {keyword} ' in f' {where_lower} ':
+                raise ValueError(
+                    f"Potentially dangerous SQL keyword '{keyword}' found in WHERE clause: {context}"
                 )
 
     def _validate_output(self, output: Dict[str, Any]):

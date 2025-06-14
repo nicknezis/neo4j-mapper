@@ -24,7 +24,7 @@ mappings:
       - type: "INNER"
         left_table: "users_csv.users"
         right_table: "orders_csv.orders"
-        on: "users.user_id = orders.user_id"
+        condition: "users.user_id = orders.user_id"
     
     # Node definitions
     nodes:

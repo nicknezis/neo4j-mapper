@@ -23,15 +23,15 @@ mappings:
       - type: "INNER"
         left_table: "hr.employees"
         right_table: "pm.project_assignments"
-        on: "employees.employee_id = project_assignments.employee_id"
+        condition: "employees.employee_id = project_assignments.employee_id"
       - type: "INNER"
         left_table: "pm.project_assignments"
         right_table: "pm.projects"
-        on: "project_assignments.project_id = projects.project_id"
+        condition: "project_assignments.project_id = projects.project_id"
       - type: "LEFT"
         left_table: "pm.project_assignments"
         right_table: "time.time_entries"
-        on: "project_assignments.assignment_id = time_entries.assignment_id"
+        condition: "project_assignments.assignment_id = time_entries.assignment_id"
     
     nodes:
       - label: "Employee"

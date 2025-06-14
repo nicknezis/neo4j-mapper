@@ -15,21 +15,23 @@ mappings:
       - type: "INNER"
         left_table: "ecommerce.users"
         right_table: "ecommerce.orders"
-        on: "users.id = orders.user_id"
+        condition: "users.id = orders.user_id"
       - type: "LEFT"
         left_table: "ecommerce.orders"
         right_table: "ecommerce.order_items"
-        on: "orders.id = order_items.order_id"
+        condition: "orders.id = order_items.order_id"
       - type: "INNER"
         left_table: "ecommerce.order_items"
         right_table: "ecommerce.products"
-        on: "order_items.product_id = products.id"
+        condition: "order_items.product_id = products.id"
     
     # Node definitions
     nodes:
       - label: "User"
         source: "users"
         id_field: "id"
+        # Only include active users who registered in the last 2 years
+        where: "is_active = true AND registration_date >= '2022-01-01'"
         properties:
           - field: "name"
             type: "string"
@@ -39,6 +41,8 @@ mappings:
             type: "datetime"
           - field: "country"
             type: "string"
+          - field: "is_active"
+            type: "boolean"
         # Computed properties example
         computed_properties:
           - name: "display_name"
@@ -51,6 +55,8 @@ mappings:
       - label: "Order"
         source: "orders"
         id_field: "id"
+        # Only include completed orders with value > $25
+        where: "status IN ('completed', 'shipped') AND total_amount > 25.0"
         properties:
           - field: "order_number"
             type: "string"
@@ -79,6 +85,8 @@ mappings:
       - type: "PLACED_ORDER"
         from_node: "User"
         to_node: "Order"
+        # Only include relationships for orders placed this year
+        where: "order_date >= '2024-01-01'"
         properties:
           - field: "order_date"
             type: "datetime"
@@ -86,6 +94,8 @@ mappings:
       - type: "CONTAINS"
         from_node: "Order"
         to_node: "Product"
+        # Only include high-quantity items (> 1 unit)
+        where: "quantity > 1"
         properties:
           - field: "quantity"
             type: "integer"
@@ -119,5 +129,5 @@ mappings:
         # or use a post-processing step to link across mappings
 
 output:
-  format: "all"  # Generate CSV, JSON, and Cypher formats
+  format: "csv"  # CSV format for this example
   directory: "output"
