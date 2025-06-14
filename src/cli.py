@@ -40,8 +40,8 @@ def cli(verbose: bool, quiet: bool):
     "--format",
     "-f",
     type=click.Choice(["csv", "json", "cypher", "all"]),
-    default="csv",
-    help="Output format",
+    default=None,
+    help="Output format (overrides config file setting)",
 )
 @click.option(
     "--mapping", "-m", help="Specific mapping to process (default: all mappings)"
@@ -59,6 +59,14 @@ def transform(
         # Load and validate configuration
         config_loader = ConfigLoader()
         config = config_loader.load_config(config_file)
+        
+        # Get output format from config if not specified via CLI
+        if format is None:
+            output_config = config_loader.get_output_config(config)
+            format = output_config.get("format", "csv")
+            logger.info(f"Using format from config file: {format}")
+        else:
+            logger.info(f"Using format from CLI: {format}")
 
         logger.info(f"Loaded configuration from: {config_file}")
 
