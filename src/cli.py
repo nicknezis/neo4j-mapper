@@ -34,7 +34,7 @@ def cli(verbose: bool, quiet: bool):
 @cli.command()
 @click.argument("config_file", type=click.Path(exists=True))
 @click.option(
-    "--output-dir", "-o", default="output", help="Output directory for generated files"
+    "--output-dir", "-o", default=None, help="Output directory for generated files (overrides config file setting)"
 )
 @click.option(
     "--format",
@@ -60,13 +60,22 @@ def transform(
         config_loader = ConfigLoader()
         config = config_loader.load_config(config_file)
         
+        # Get output configuration from config file
+        output_config = config_loader.get_output_config(config)
+        
         # Get output format from config if not specified via CLI
         if format is None:
-            output_config = config_loader.get_output_config(config)
             format = output_config.get("format", "csv")
             logger.info(f"Using format from config file: {format}")
         else:
             logger.info(f"Using format from CLI: {format}")
+            
+        # Get output directory from config if not specified via CLI
+        if output_dir is None:
+            output_dir = output_config.get("directory", "output")
+            logger.info(f"Using output directory from config file: {output_dir}")
+        else:
+            logger.info(f"Using output directory from CLI: {output_dir}")
 
         logger.info(f"Loaded configuration from: {config_file}")
 
