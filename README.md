@@ -12,6 +12,13 @@ A configurable Python tool for mapping SQLite data to Neo4j graph format. Transf
 - 🔧 **CLI Interface**: Command-line tool for easy automation
 - ✅ **Data Validation**: Comprehensive validation and error handling
 
+## Dependencies
+- PyYAML: Configuration file parsing
+- sqlite3: SQLite database connectivity (built-in)
+- pandas: Data manipulation and analysis
+- click: CLI framework
+- jsonschema: Configuration validation
+
 ## Installation
 
 ### From Source
