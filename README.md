@@ -97,7 +97,7 @@ mappings:
       - type: "INNER"
         left_table: "users_db.users"
         right_table: "orders_db.orders"
-        on: "users.id = orders.user_id"
+        condition: "users.id = orders.user_id"
     
     nodes:
       - label: "User"
@@ -236,7 +236,7 @@ joins:
   - type: "INNER"                  # JOIN type (INNER, LEFT, RIGHT, FULL)
     left_table: "alias.table"      # Left table (alias.table_name)
     right_table: "alias.table"     # Right table (alias.table_name)
-    on: "left.id = right.id"       # JOIN condition
+    condition: "left.id = right.id"       # JOIN condition
 ```
 
 ## Examples
