@@ -2,14 +2,16 @@
 
 import pandas as pd
 from typing import Dict, Any, List, Optional, Union
-from datetime import datetime, date, time
+
+# datetime imports used in TYPE_CONVERTERS lambdas
 import logging
 import re
 
 
 class DataMapper:
-    """Maps and transforms data according to configuration specifications."""
+    """Handles mapping of DataFrame data to graph node and relationship properties."""
 
+    # Type conversion mapping
     TYPE_CONVERTERS = {
         "string": str,
         "integer": int,
@@ -22,6 +24,7 @@ class DataMapper:
 
     def __init__(self):
         self.logger = logging.getLogger(__name__)
+        self._regex_cache = {}
 
     def map_node_properties(
         self, df: pd.DataFrame, node_config: Dict[str, Any]
@@ -38,28 +41,28 @@ class DataMapper:
             field_name = prop_config["field"]
             field_type = prop_config["type"]
 
-            # Handle source prefix if needed - prioritize database alias prefixes
+            # Resolve column name - use source from node config for better resolution
             actual_column = self._resolve_column_name(df, field_name, source)
-            
+
             if actual_column is None:
                 self.logger.warning(
                     f"Column '{field_name}' not found in DataFrame for node {node_config['label']}"
                 )
                 continue
 
+            # Update field_name to the resolved column name
             field_name = actual_column
 
-            if field_name not in df.columns:
-                self.logger.warning(f"Column '{field_name}' not found in DataFrame")
-                continue
-
             # Apply regex extractor if specified
-            if "extractor" in prop_config and prop_config["extractor"].get("type") == "regex":
+            if (
+                "extractor" in prop_config
+                and prop_config["extractor"].get("type") == "regex"
+            ):
                 try:
                     extracted_data = self._apply_regex_extractor(
                         result_df[field_name], prop_config["extractor"], field_name
                     )
-                    
+
                     # Handle multiple extractions (groups)
                     if isinstance(extracted_data, dict):
                         for ext_field, ext_values in extracted_data.items():
@@ -81,7 +84,7 @@ class DataMapper:
                                 lambda x: self._safe_convert(x, converter)
                             )
                         property_mappings[field_name] = field_type
-                        
+
                 except Exception as e:
                     self.logger.error(
                         f"Error applying regex extractor to field '{field_name}': {e}"
@@ -125,22 +128,25 @@ class DataMapper:
 
             # Resolve column name using the same logic as nodes
             actual_column = self._resolve_column_name(df, field_name, "")
-            
+
             if actual_column is None:
                 self.logger.warning(
                     f"Column '{field_name}' not found in DataFrame for relationship"
                 )
                 continue
-                
+
             field_name = actual_column
 
             # Apply regex extractor if specified
-            if "extractor" in prop_config and prop_config["extractor"].get("type") == "regex":
+            if (
+                "extractor" in prop_config
+                and prop_config["extractor"].get("type") == "regex"
+            ):
                 try:
                     extracted_data = self._apply_regex_extractor(
                         result_df[field_name], prop_config["extractor"], field_name
                     )
-                    
+
                     # Handle multiple extractions (groups)
                     if isinstance(extracted_data, dict):
                         for ext_field, ext_values in extracted_data.items():
@@ -162,7 +168,7 @@ class DataMapper:
                                 lambda x: self._safe_convert(x, converter)
                             )
                         property_mappings[field_name] = field_type
-                        
+
                 except Exception as e:
                     self.logger.error(
                         f"Error applying regex extractor to relationship field '{field_name}': {e}"
@@ -196,18 +202,19 @@ class DataMapper:
         """Extract node data with unique IDs and properties."""
         # Get source for column resolution
         source = node_config.get("source", "")
-        
+
         # Resolve ID field
         id_field = node_config["id_field"]
         resolved_id_field = self._resolve_column_name(df, id_field, source)
-        
+
         if resolved_id_field is None:
             raise ValueError(f"ID field '{id_field}' not found in DataFrame")
 
         # Resolve property fields
         property_fields = []
-        for prop in node_config["properties"]:
-            resolved_field = self._resolve_column_name(df, prop["field"], source)
+        for prop_config in node_config["properties"]:
+            field_name = prop_config["field"]
+            resolved_field = self._resolve_column_name(df, field_name, source)
             if resolved_field:
                 property_fields.append(resolved_field)
 
@@ -249,33 +256,33 @@ class DataMapper:
 
         if not from_node_config or not to_node_config:
             raise ValueError(
-                f"Could not find node configurations for relationship {rel_config['type']}"
+                f"Node configurations not found for relationship {rel_config['type']}"
             )
 
-        # Resolve ID fields using node sources
+        # Get sources for column resolution
         from_source = from_node_config.get("source", "")
         to_source = to_node_config.get("source", "")
-        
+
+        # Resolve ID fields
         from_id_field = from_node_config["id_field"]
         to_id_field = to_node_config["id_field"]
-        
+
         resolved_from_id = self._resolve_column_name(df, from_id_field, from_source)
         resolved_to_id = self._resolve_column_name(df, to_id_field, to_source)
-        
+
         if resolved_from_id is None:
             raise ValueError(f"From ID field '{from_id_field}' not found in DataFrame")
         if resolved_to_id is None:
             raise ValueError(f"To ID field '{to_id_field}' not found in DataFrame")
 
-        # Select relationship columns
+        # Collect relationship property columns
         columns_to_select = [resolved_from_id, resolved_to_id]
-
-        # Add relationship properties if specified
         if "properties" in rel_config:
-            for prop in rel_config["properties"]:
-                resolved_prop = self._resolve_column_name(df, prop["field"], "")
-                if resolved_prop:
-                    columns_to_select.append(resolved_prop)
+            for prop_config in rel_config["properties"]:
+                field_name = prop_config["field"]
+                resolved_field = self._resolve_column_name(df, field_name, "")
+                if resolved_field:
+                    columns_to_select.append(resolved_field)
 
         # Extract relationships
         rel_df = df[columns_to_select].copy()
@@ -297,56 +304,40 @@ class DataMapper:
             return None
 
         try:
-            if converter == bool:
-                # Handle various boolean representations
-                if isinstance(value, str):
-                    return value.lower() in ("true", "1", "yes", "on", "t", "y")
-                return bool(value)
+            return converter(value)
+        except (ValueError, TypeError, AttributeError):
+            return None
 
-            elif converter == pd.to_datetime:
-                return pd.to_datetime(value)
-
-            elif callable(converter):
-                return converter(value)
-
-            else:
-                return converter(value)
-
-        except (ValueError, TypeError) as e:
-            self.logger.warning(
-                f"Could not convert value '{value}' using {converter}: {e}"
-            )
-            return value
-
-    def validate_data_types(
-        self, df: pd.DataFrame, config_properties: List[Dict[str, Any]]
+    def validate_property_types(
+        self, df: pd.DataFrame, property_configs: List[Dict[str, Any]]
     ) -> List[str]:
-        """Validate that DataFrame columns match expected types."""
+        """Validate that DataFrame columns can be converted to expected types."""
         errors = []
 
-        for prop_config in config_properties:
+        for prop_config in property_configs:
             field_name = prop_config["field"]
             expected_type = prop_config["type"]
 
             if field_name not in df.columns:
-                errors.append(f"Missing column: {field_name}")
                 continue
 
-            # Check for type compatibility
-            column_data = df[field_name].dropna()
-
-            if len(column_data) == 0:
+            if expected_type not in self.TYPE_CONVERTERS:
+                errors.append(
+                    f"Unknown type '{expected_type}' for field '{field_name}'"
+                )
                 continue
 
-            # Sample a few values to check type compatibility
-            sample_values = column_data.head(10)
+            # Sample a few values to check conversion
+            sample_values = df[field_name].dropna().head(10).tolist()
+            if not sample_values:
+                continue
+
+            converter = self.TYPE_CONVERTERS[expected_type]
             type_errors = 0
 
             for value in sample_values:
                 try:
-                    if expected_type in self.TYPE_CONVERTERS:
-                        converter = self.TYPE_CONVERTERS[expected_type]
-                        self._safe_convert(value, converter)
+                    converter(value)
                 except Exception:
                     type_errors += 1
 
@@ -363,47 +354,341 @@ class DataMapper:
         """Apply regex extractor to extract values from a pandas Series."""
         pattern = extractor_config.get("pattern")
         if not pattern:
-            raise ValueError(f"Regex extractor missing 'pattern' for field '{field_name}'")
-        
+            raise ValueError(
+                f"Regex extractor missing 'pattern' for field '{field_name}'"
+            )
+
         try:
-            # Compile regex pattern
-            regex = re.compile(pattern)
+            # Use cached compiled regex pattern for performance
+            regex = self._get_compiled_regex(pattern)
         except re.error as e:
-            raise ValueError(f"Invalid regex pattern '{pattern}' for field '{field_name}': {e}")
-        
+            raise ValueError(
+                f"Invalid regex pattern '{pattern}' for field '{field_name}': {e}"
+            )
+
         # Determine extraction mode
         if "groups" in extractor_config:
             # Multiple group extraction - extract specific groups into named fields
-            return self._extract_multiple_groups(series, regex, extractor_config["groups"], 
-                                               extractor_config.get("fallback_strategy", "original"))
+            return self._extract_multiple_groups(
+                series,
+                regex,
+                extractor_config["groups"],
+                extractor_config.get("fallback_strategy", "original"),
+            )
         elif "group" in extractor_config:
             # Single group extraction
             group_num = extractor_config["group"]
-            return self._extract_single_group(series, regex, group_num, 
-                                            extractor_config.get("fallback_strategy", "original"))
+            return self._extract_single_group(
+                series,
+                regex,
+                group_num,
+                extractor_config.get("fallback_strategy", "original"),
+            )
         elif extractor_config.get("named_groups", False):
             # Extract all named groups
-            return self._extract_named_groups(series, regex, 
-                                            extractor_config.get("fallback_strategy", "original"))
+            return self._extract_named_groups(
+                series, regex, extractor_config.get("fallback_strategy", "original")
+            )
         else:
             # Default: extract first group if available, otherwise full match
-            return self._extract_default(series, regex, 
-                                       extractor_config.get("fallback_strategy", "original"))
+            return self._extract_default(
+                series, regex, extractor_config.get("fallback_strategy", "original")
+            )
+
+    def _get_compiled_regex(self, pattern: str) -> re.Pattern:
+        """Get compiled regex pattern from cache or compile and cache it."""
+        if pattern not in self._regex_cache:
+            self._regex_cache[pattern] = re.compile(pattern)
+        return self._regex_cache[pattern]
 
     def _extract_multiple_groups(
-        self, series: pd.Series, regex: re.Pattern, group_names: List[str], fallback_strategy: str
+        self,
+        series: pd.Series,
+        regex: re.Pattern,
+        group_names: List[str],
+        fallback_strategy: str,
     ) -> Dict[str, pd.Series]:
-        """Extract multiple regex groups into separate fields."""
+        """Extract multiple regex groups using vectorized operations."""
         result = {}
-        
+
+        # Convert series to string, handling NaN values
+        str_series = series.astype(str)
+
+        try:
+            # Use pandas str.extract for vectorized regex processing
+            extracted_df = str_series.str.extract(regex.pattern, expand=True)
+
+            for i, group_name in enumerate(group_names):
+                if i < len(extracted_df.columns):
+                    extracted_series = extracted_df.iloc[:, i]
+
+                    # Apply fallback strategy for non-matches
+                    if fallback_strategy == "original":
+                        extracted_series = extracted_series.where(
+                            extracted_series.notna(), series
+                        )
+                    elif fallback_strategy == "null":
+                        extracted_series = extracted_series.where(
+                            extracted_series.notna(), None
+                        )
+                    elif fallback_strategy == "empty":
+                        extracted_series = extracted_series.fillna("")
+
+                    # Handle original NaN values
+                    extracted_series = extracted_series.where(series.notna(), None)
+                    result[group_name] = extracted_series
+                else:
+                    # Group doesn't exist, apply fallback
+                    if fallback_strategy == "original":
+                        result[group_name] = series.copy()
+                    elif fallback_strategy == "null":
+                        result[group_name] = pd.Series(
+                            [None] * len(series), index=series.index
+                        )
+                    elif fallback_strategy == "empty":
+                        result[group_name] = pd.Series(
+                            [""] * len(series), index=series.index
+                        )
+
+        except Exception as e:
+            # Fallback to original implementation if vectorized approach fails
+            self.logger.warning(
+                f"Vectorized regex extraction failed, using iterative approach: {e}"
+            )
+            return self._extract_multiple_groups_iterative(
+                series, regex, group_names, fallback_strategy
+            )
+
+        return result
+
+    def _extract_single_group(
+        self,
+        series: pd.Series,
+        regex: re.Pattern,
+        group_num: int,
+        fallback_strategy: str,
+    ) -> pd.Series:
+        """Extract a single regex group using vectorized operations."""
+        # Convert series to string, handling NaN values
+        str_series = series.astype(str)
+
+        try:
+            # Use pandas str.extract for vectorized regex processing
+            extracted_df = str_series.str.extract(regex.pattern, expand=True)
+
+            if group_num > 0 and group_num <= len(extracted_df.columns):
+                extracted_series = extracted_df.iloc[
+                    :, group_num - 1
+                ]  # group_num is 1-based
+            else:
+                # Invalid group number, apply fallback
+                if fallback_strategy == "original":
+                    return series.copy()
+                elif fallback_strategy == "null":
+                    return pd.Series([None] * len(series), index=series.index)
+                elif fallback_strategy == "empty":
+                    return pd.Series([""] * len(series), index=series.index)
+                return series.copy()
+
+            # Apply fallback strategy for non-matches
+            if fallback_strategy == "original":
+                extracted_series = extracted_series.where(
+                    extracted_series.notna(), series
+                )
+            elif fallback_strategy == "null":
+                extracted_series = extracted_series.where(
+                    extracted_series.notna(), None
+                )
+            elif fallback_strategy == "empty":
+                extracted_series = extracted_series.fillna("")
+
+            # Handle original NaN values
+            extracted_series = extracted_series.where(series.notna(), None)
+            return extracted_series
+
+        except Exception as e:
+            # Fallback to original implementation if vectorized approach fails
+            self.logger.warning(
+                f"Vectorized regex extraction failed, using iterative approach: {e}"
+            )
+            return self._extract_single_group_iterative(
+                series, regex, group_num, fallback_strategy
+            )
+
+    def _extract_named_groups(
+        self, series: pd.Series, regex: re.Pattern, fallback_strategy: str
+    ) -> Dict[str, pd.Series]:
+        """Extract all named groups from regex using vectorized operations."""
+        # Get all named groups from the pattern
+        if not regex.groupindex:
+            raise ValueError("No named groups found in regex pattern")
+
+        result = {}
+        group_names = list(regex.groupindex.keys())
+
+        # Convert series to string, handling NaN values
+        str_series = series.astype(str)
+
+        try:
+            # Use pandas str.extract for vectorized regex processing
+            extracted_df = str_series.str.extract(regex.pattern, expand=True)
+
+            for group_name in group_names:
+                # Get the group index (0-based)
+                group_idx = regex.groupindex[group_name] - 1
+
+                if group_idx < len(extracted_df.columns):
+                    extracted_series = extracted_df.iloc[:, group_idx]
+
+                    # Apply fallback strategy for non-matches
+                    if fallback_strategy == "original":
+                        extracted_series = extracted_series.where(
+                            extracted_series.notna(), series
+                        )
+                    elif fallback_strategy == "null":
+                        extracted_series = extracted_series.where(
+                            extracted_series.notna(), None
+                        )
+                    elif fallback_strategy == "empty":
+                        extracted_series = extracted_series.fillna("")
+
+                    # Handle original NaN values
+                    extracted_series = extracted_series.where(series.notna(), None)
+                    result[group_name] = extracted_series
+                else:
+                    # Group doesn't exist, apply fallback
+                    if fallback_strategy == "original":
+                        result[group_name] = series.copy()
+                    elif fallback_strategy == "null":
+                        result[group_name] = pd.Series(
+                            [None] * len(series), index=series.index
+                        )
+                    elif fallback_strategy == "empty":
+                        result[group_name] = pd.Series(
+                            [""] * len(series), index=series.index
+                        )
+
+        except Exception as e:
+            # Fallback to original implementation if vectorized approach fails
+            self.logger.warning(
+                f"Vectorized regex extraction failed, using iterative approach: {e}"
+            )
+            return self._extract_named_groups_iterative(
+                series, regex, fallback_strategy
+            )
+
+        return result
+
+    def _extract_default(
+        self, series: pd.Series, regex: re.Pattern, fallback_strategy: str
+    ) -> pd.Series:
+        """Extract using default strategy (first group if available, otherwise full match)."""
+        # Convert series to string, handling NaN values
+        str_series = series.astype(str)
+
+        try:
+            # Use pandas str.extract for vectorized regex processing
+            extracted_df = str_series.str.extract(regex.pattern, expand=True)
+
+            if len(extracted_df.columns) > 0:
+                # Use first group if available
+                extracted_series = extracted_df.iloc[:, 0]
+            else:
+                # Use full match if no groups
+                extracted_series = str_series.str.extract(
+                    f"({regex.pattern})", expand=False
+                )
+
+            # Apply fallback strategy for non-matches
+            if fallback_strategy == "original":
+                extracted_series = extracted_series.where(
+                    extracted_series.notna(), series
+                )
+            elif fallback_strategy == "null":
+                extracted_series = extracted_series.where(
+                    extracted_series.notna(), None
+                )
+            elif fallback_strategy == "empty":
+                extracted_series = extracted_series.fillna("")
+
+            # Handle original NaN values
+            extracted_series = extracted_series.where(series.notna(), None)
+            return extracted_series
+
+        except Exception as e:
+            # Fallback to original implementation if vectorized approach fails
+            self.logger.warning(
+                f"Vectorized regex extraction failed, using iterative approach: {e}"
+            )
+            return self._extract_default_iterative(series, regex, fallback_strategy)
+
+    def _resolve_column_name(
+        self, df: pd.DataFrame, field_name: str, source: str = ""
+    ) -> Optional[str]:
+        """Resolve field name to actual DataFrame column, prioritizing database alias prefixes."""
+        # Create list of possible column names in priority order
+        possible_columns = []
+
+        # If source is provided, try various prefix patterns
+        if source:
+            if "." in source:
+                # Source like "hr.employees" - extract database alias
+                db_alias = source.split(".")[0]
+                possible_columns.extend(
+                    [
+                        f"{db_alias}_{field_name}",  # Highest priority: db_alias_field
+                        f"{source}_{field_name}",  # db_alias.table_field
+                        f"{source}.{field_name}",  # db_alias.table.field
+                    ]
+                )
+            else:
+                # Simple source name
+                possible_columns.extend(
+                    [
+                        f"{source}_{field_name}",  # source_field
+                        f"{source}.{field_name}",  # source.field
+                    ]
+                )
+
+        # Add database alias prefixed versions by scanning existing columns
+        # This handles cases where we don't know the source but columns are prefixed
+        for col in df.columns:
+            if col.endswith(f"_{field_name}") and col not in possible_columns:
+                possible_columns.append(col)
+
+        # Add original field name as fallback
+        possible_columns.append(field_name)
+
+        # Find first matching column
+        for col in possible_columns:
+            if col in df.columns:
+                if col != field_name:
+                    self.logger.debug(
+                        f"Resolved field '{field_name}' to column '{col}'"
+                    )
+                return col
+
+        return None
+
+    # Iterative fallback methods for regex extraction (used when vectorized approach fails)
+    def _extract_multiple_groups_iterative(
+        self,
+        series: pd.Series,
+        regex: re.Pattern,
+        group_names: List[str],
+        fallback_strategy: str,
+    ) -> Dict[str, pd.Series]:
+        """Extract multiple regex groups using iterative approach (fallback)."""
+        result = {}
+
         for i, group_name in enumerate(group_names, 1):
             extracted_values = []
-            
+
             for value in series:
                 if pd.isna(value) or value is None:
                     extracted_values.append(None)
                     continue
-                    
+
                 match = regex.search(str(value))
                 if match and len(match.groups()) >= i:
                     extracted_values.append(match.group(i))
@@ -417,22 +702,26 @@ class DataMapper:
                         extracted_values.append("")
                     else:
                         extracted_values.append(value)
-            
+
             result[group_name] = pd.Series(extracted_values, index=series.index)
-        
+
         return result
 
-    def _extract_single_group(
-        self, series: pd.Series, regex: re.Pattern, group_num: int, fallback_strategy: str
+    def _extract_single_group_iterative(
+        self,
+        series: pd.Series,
+        regex: re.Pattern,
+        group_num: int,
+        fallback_strategy: str,
     ) -> pd.Series:
-        """Extract a single regex group."""
+        """Extract a single regex group using iterative approach (fallback)."""
         extracted_values = []
-        
+
         for value in series:
             if pd.isna(value) or value is None:
                 extracted_values.append(None)
                 continue
-                
+
             match = regex.search(str(value))
             if match and len(match.groups()) >= group_num:
                 extracted_values.append(match.group(group_num))
@@ -446,68 +735,27 @@ class DataMapper:
                     extracted_values.append("")
                 else:
                     extracted_values.append(value)
-        
+
         return pd.Series(extracted_values, index=series.index)
 
-    def _resolve_column_name(self, df: pd.DataFrame, field_name: str, source: str = "") -> Optional[str]:
-        """Resolve field name to actual DataFrame column, prioritizing database alias prefixes."""
-        # Create list of possible column names in priority order
-        possible_columns = []
-        
-        # If source is provided, try various prefix patterns
-        if source:
-            if "." in source:
-                # Source like "hr.employees" - extract database alias
-                db_alias = source.split(".")[0]
-                possible_columns.extend([
-                    f"{db_alias}_{field_name}",    # Highest priority: db_alias_field
-                    f"{source}_{field_name}",      # db_alias.table_field  
-                    f"{source}.{field_name}",      # db_alias.table.field
-                ])
-            else:
-                # Simple source name
-                possible_columns.extend([
-                    f"{source}_{field_name}",      # source_field
-                    f"{source}.{field_name}",      # source.field
-                ])
-        
-        # Add database alias prefixed versions by scanning existing columns
-        # This handles cases where we don't know the source but columns are prefixed
-        for col in df.columns:
-            if col.endswith(f"_{field_name}") and col not in possible_columns:
-                possible_columns.append(col)
-        
-        # Add original field name as fallback
-        possible_columns.append(field_name)
-        
-        # Find first matching column
-        for col in possible_columns:
-            if col in df.columns:
-                if col != field_name:
-                    self.logger.debug(f"Resolved field '{field_name}' to column '{col}'")
-                return col
-        
-        return None
-
-    def _extract_named_groups(
+    def _extract_named_groups_iterative(
         self, series: pd.Series, regex: re.Pattern, fallback_strategy: str
     ) -> Dict[str, pd.Series]:
-        """Extract all named groups from regex."""
-        # Get all named groups from the pattern
+        """Extract all named groups from regex using iterative approach (fallback)."""
         if not regex.groupindex:
             raise ValueError("No named groups found in regex pattern")
-        
+
         result = {}
         group_names = list(regex.groupindex.keys())
-        
+
         for group_name in group_names:
             extracted_values = []
-            
+
             for value in series:
                 if pd.isna(value) or value is None:
                     extracted_values.append(None)
                     continue
-                    
+
                 match = regex.search(str(value))
                 if match:
                     try:
@@ -533,22 +781,22 @@ class DataMapper:
                         extracted_values.append("")
                     else:
                         extracted_values.append(value)
-            
+
             result[group_name] = pd.Series(extracted_values, index=series.index)
-        
+
         return result
 
-    def _extract_default(
+    def _extract_default_iterative(
         self, series: pd.Series, regex: re.Pattern, fallback_strategy: str
     ) -> pd.Series:
-        """Extract using default strategy (first group if available, otherwise full match)."""
+        """Extract using default strategy with iterative approach (fallback)."""
         extracted_values = []
-        
+
         for value in series:
             if pd.isna(value) or value is None:
                 extracted_values.append(None)
                 continue
-                
+
             match = regex.search(str(value))
             if match:
                 # Use first group if available, otherwise full match
@@ -566,45 +814,5 @@ class DataMapper:
                     extracted_values.append("")
                 else:
                     extracted_values.append(value)
-        
-        return pd.Series(extracted_values, index=series.index)
 
-    def _resolve_column_name(self, df: pd.DataFrame, field_name: str, source: str = "") -> Optional[str]:
-        """Resolve field name to actual DataFrame column, prioritizing database alias prefixes."""
-        # Create list of possible column names in priority order
-        possible_columns = []
-        
-        # If source is provided, try various prefix patterns
-        if source:
-            if "." in source:
-                # Source like "hr.employees" - extract database alias
-                db_alias = source.split(".")[0]
-                possible_columns.extend([
-                    f"{db_alias}_{field_name}",    # Highest priority: db_alias_field
-                    f"{source}_{field_name}",      # db_alias.table_field  
-                    f"{source}.{field_name}",      # db_alias.table.field
-                ])
-            else:
-                # Simple source name
-                possible_columns.extend([
-                    f"{source}_{field_name}",      # source_field
-                    f"{source}.{field_name}",      # source.field
-                ])
-        
-        # Add database alias prefixed versions by scanning existing columns
-        # This handles cases where we don't know the source but columns are prefixed
-        for col in df.columns:
-            if col.endswith(f"_{field_name}") and col not in possible_columns:
-                possible_columns.append(col)
-        
-        # Add original field name as fallback
-        possible_columns.append(field_name)
-        
-        # Find first matching column
-        for col in possible_columns:
-            if col in df.columns:
-                if col != field_name:
-                    self.logger.debug(f"Resolved field '{field_name}' to column '{col}'")
-                return col
-        
-        return None
+        return pd.Series(extracted_values, index=series.index)
