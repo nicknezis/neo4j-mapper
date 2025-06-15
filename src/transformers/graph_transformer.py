@@ -2,6 +2,8 @@
 
 import pandas as pd
 from typing import Dict, Any, List, Tuple, Optional
+from concurrent.futures import ThreadPoolExecutor, as_completed
+import multiprocessing
 import logging
 from .data_mapper import DataMapper
 
@@ -9,9 +11,11 @@ from .data_mapper import DataMapper
 class GraphTransformer:
     """Transforms relational data into graph format for Neo4j."""
 
-    def __init__(self):
+    def __init__(self, enable_parallel: bool = True, max_workers: Optional[int] = None):
         self.data_mapper = DataMapper()
         self.logger = logging.getLogger(__name__)
+        self.enable_parallel = enable_parallel
+        self.max_workers = max_workers or min(multiprocessing.cpu_count(), 4)
 
     def transform_mapping(
         self, df: pd.DataFrame, mapping_config: Dict[str, Any]
@@ -23,17 +27,11 @@ class GraphTransformer:
         mapping_name = mapping_config.get("name", "unnamed_mapping")
         self.logger.info(f"Processing mapping: {mapping_name}")
 
-        # Process nodes
-        for node_config in mapping_config["nodes"]:
-            try:
-                node_df = self._transform_node(df, node_config)
-                nodes_data.append(node_df)
-                self.logger.info(
-                    f"Processed node: {node_config['label']} ({len(node_df)} records)"
-                )
-            except Exception as e:
-                self.logger.error(f"Error processing node {node_config['label']}: {e}")
-                raise
+        # Process nodes (with optional parallelization)
+        if self.enable_parallel and len(mapping_config["nodes"]) > 1:
+            nodes_data = self._process_nodes_parallel(df, mapping_config["nodes"])
+        else:
+            nodes_data = self._process_nodes_sequential(df, mapping_config["nodes"])
 
         # Process relationships if defined
         if "relationships" in mapping_config:
@@ -44,7 +42,8 @@ class GraphTransformer:
                     )
                     relationships_data.append(rel_df)
                     self.logger.info(
-                        f"Processed relationship: {rel_config['type']} ({len(rel_df)} records)"
+                        f"Processed relationship: {rel_config['type']} "
+                        f"({len(rel_df)} records)"
                     )
                 except Exception as e:
                     self.logger.error(
@@ -61,9 +60,12 @@ class GraphTransformer:
         # Apply WHERE clause filtering if specified
         filtered_df = df
         if "where" in node_config:
-            filtered_df = self._apply_where_filter(df, node_config["where"], node_config.get("source", ""))
+            filtered_df = self._apply_where_filter(
+                df, node_config["where"], node_config.get("source", "")
+            )
             self.logger.info(
-                f"Applied WHERE filter to node {node_config['label']}: {len(df)} -> {len(filtered_df)} records"
+                f"Applied WHERE filter to node {node_config['label']}: "
+                f"{len(df)} -> {len(filtered_df)} records"
             )
 
         # Map properties according to configuration
@@ -92,11 +94,14 @@ class GraphTransformer:
         if "where" in rel_config:
             filtered_df = self._apply_where_filter(df, rel_config["where"], "")
             self.logger.info(
-                f"Applied WHERE filter to relationship {rel_config['type']}: {len(df)} -> {len(filtered_df)} records"
+                f"Applied WHERE filter to relationship {rel_config['type']}: "
+                f"{len(df)} -> {len(filtered_df)} records"
             )
 
         # Map relationship properties
-        mapped_df = self.data_mapper.map_relationship_properties(filtered_df, rel_config)
+        mapped_df = self.data_mapper.map_relationship_properties(
+            filtered_df, rel_config
+        )
 
         # Extract relationship data
         rel_df = self.data_mapper.extract_relationship_data(
@@ -255,7 +260,8 @@ class GraphTransformer:
                 continue
 
             # Check for orphaned relationships (IDs that don't exist in nodes)
-            # This is a basic check - in practice, you might want more sophisticated validation
+            # This is a basic check - in practice, you might want more
+            # sophisticated validation
 
             if len(rel_df) > 0:
                 rel_type = rel_df.iloc[0]["_type"]
@@ -326,20 +332,24 @@ class GraphTransformer:
         """Apply WHERE clause filtering to a DataFrame."""
         if not where_clause or not where_clause.strip():
             return df
-        
+
         try:
             # Use pandas query method for filtering
             # Convert SQL-style column references to pandas-compatible ones
             pandas_query = self._convert_where_to_pandas_query(df, where_clause, source)
-            
+
             if pandas_query:
                 filtered_df = df.query(pandas_query)
-                self.logger.debug(f"Applied WHERE filter: '{where_clause}' -> '{pandas_query}'")
+                self.logger.debug(
+                    f"Applied WHERE filter: '{where_clause}' -> '{pandas_query}'"
+                )
                 return filtered_df
             else:
-                self.logger.warning(f"Could not convert WHERE clause to pandas query: {where_clause}")
+                self.logger.warning(
+                    f"Could not convert WHERE clause to pandas query: {where_clause}"
+                )
                 return df
-                
+
         except Exception as e:
             self.logger.error(f"Error applying WHERE filter '{where_clause}': {e}")
             # Return original DataFrame if filtering fails
@@ -350,104 +360,267 @@ class GraphTransformer:
     ) -> Optional[str]:
         """Convert SQL WHERE clause to pandas query syntax."""
         try:
-            # Resolve column names in the WHERE clause using the same logic as DataMapper
+            # Resolve column names in the WHERE clause using the same logic as
+            # DataMapper
             resolved_query = where_clause
-            
+
             # Find potential column references and resolve them
             import re
-            
+
             # Match word boundaries to find potential column names
             # This is a simplified approach - more sophisticated parsing could be added
-            words = re.findall(r'\b[a-zA-Z_][a-zA-Z0-9_]*\b', where_clause)
-            
+            words = re.findall(r"\b[a-zA-Z_][a-zA-Z0-9_]*\b", where_clause)
+
             # Track which words we've already processed to avoid double-wrapping
             processed_words = set()
-            
+
             for word in words:
                 # Skip SQL keywords and operators
-                if word.upper() in {'AND', 'OR', 'NOT', 'IN', 'LIKE', 'IS', 'NULL', 'TRUE', 'FALSE', 
-                                   'BETWEEN', 'EXISTS', 'ANY', 'ALL', 'SOME', 'ASC', 'DESC'}:
+                if word.upper() in {
+                    "AND",
+                    "OR",
+                    "NOT",
+                    "IN",
+                    "LIKE",
+                    "IS",
+                    "NULL",
+                    "TRUE",
+                    "FALSE",
+                    "BETWEEN",
+                    "EXISTS",
+                    "ANY",
+                    "ALL",
+                    "SOME",
+                    "ASC",
+                    "DESC",
+                }:
                     continue
-                
+
                 # Skip if we've already processed this word
                 if word in processed_words:
                     continue
-                
+
                 # Try to resolve the column name
                 resolved_col = self.data_mapper._resolve_column_name(df, word, source)
                 if resolved_col and resolved_col != word:
                     # Replace the column reference in the query
                     # Use word boundaries to avoid partial replacements
-                    pattern = r'\b' + re.escape(word) + r'\b'
-                    resolved_query = re.sub(pattern, f"`{resolved_col}`", resolved_query)
+                    pattern = r"\b" + re.escape(word) + r"\b"
+                    resolved_query = re.sub(
+                        pattern, f"`{resolved_col}`", resolved_query
+                    )
                     processed_words.add(word)
                 elif word in df.columns:
                     # Column exists as-is, but wrap in backticks for pandas query
-                    pattern = r'\b' + re.escape(word) + r'\b'
+                    pattern = r"\b" + re.escape(word) + r"\b"
                     resolved_query = re.sub(pattern, f"`{word}`", resolved_query)
                     processed_words.add(word)
-            
+
             # Convert SQL operators to pandas query syntax
             # Handle basic SQL to pandas conversions
-            resolved_query = resolved_query.replace(' = ', ' == ')
-            resolved_query = resolved_query.replace('!=', '!=')  # Already correct
-            resolved_query = resolved_query.replace('<>', '!=')  # SQL alternative for !=
-            
+            resolved_query = resolved_query.replace(" = ", " == ")
+            resolved_query = resolved_query.replace("!=", "!=")  # Already correct
+            resolved_query = resolved_query.replace(
+                "<>", "!="
+            )  # SQL alternative for !=
+
             # Convert SQL boolean literals to Python boolean literals
-            resolved_query = re.sub(r'\btrue\b', 'True', resolved_query, flags=re.IGNORECASE)
-            resolved_query = re.sub(r'\bfalse\b', 'False', resolved_query, flags=re.IGNORECASE)
-            
+            resolved_query = re.sub(
+                r"\btrue\b", "True", resolved_query, flags=re.IGNORECASE
+            )
+            resolved_query = re.sub(
+                r"\bfalse\b", "False", resolved_query, flags=re.IGNORECASE
+            )
+
             # Convert SQL logical operators to Python logical operators
-            resolved_query = re.sub(r'\bAND\b', 'and', resolved_query, flags=re.IGNORECASE)
-            resolved_query = re.sub(r'\bOR\b', 'or', resolved_query, flags=re.IGNORECASE)
-            resolved_query = re.sub(r'\bNOT\b', 'not', resolved_query, flags=re.IGNORECASE)
-            
+            resolved_query = re.sub(
+                r"\bAND\b", "and", resolved_query, flags=re.IGNORECASE
+            )
+            resolved_query = re.sub(
+                r"\bOR\b", "or", resolved_query, flags=re.IGNORECASE
+            )
+            resolved_query = re.sub(
+                r"\bNOT\b", "not", resolved_query, flags=re.IGNORECASE
+            )
+
             # Handle IS NULL / IS NOT NULL
-            resolved_query = re.sub(r'`([^`]+)`\s+IS\s+NULL', r'\1.isnull()', resolved_query, flags=re.IGNORECASE)
-            resolved_query = re.sub(r'`([^`]+)`\s+IS\s+NOT\s+NULL', r'\1.notnull()', resolved_query, flags=re.IGNORECASE)
-            
+            resolved_query = re.sub(
+                r"`([^`]+)`\s+IS\s+NULL",
+                r"\1.isnull()",
+                resolved_query,
+                flags=re.IGNORECASE,
+            )
+            resolved_query = re.sub(
+                r"`([^`]+)`\s+IS\s+NOT\s+NULL",
+                r"\1.notnull()",
+                resolved_query,
+                flags=re.IGNORECASE,
+            )
+
             # Handle LIKE operator (convert to string contains - simplified)
             def convert_like(match):
                 column = match.group(1)
                 pattern = match.group(2).strip("'\"")
-                if pattern.startswith('%') and pattern.endswith('%'):
+                if pattern.startswith("%") and pattern.endswith("%"):
                     # Contains
                     search_term = pattern[1:-1]
                     return f"{column}.str.contains('{search_term}', na=False)"
-                elif pattern.startswith('%'):
+                elif pattern.startswith("%"):
                     # Ends with
                     search_term = pattern[1:]
                     return f"{column}.str.endswith('{search_term}', na=False)"
-                elif pattern.endswith('%'):
+                elif pattern.endswith("%"):
                     # Starts with
                     search_term = pattern[:-1]
                     return f"{column}.str.startswith('{search_term}', na=False)"
                 else:
                     # Exact match
                     return f"{column} == '{pattern}'"
-            
+
             resolved_query = re.sub(
-                r'`([^`]+)`\s+LIKE\s+([\'"][^\'\"]*[\'"])', 
-                convert_like, 
-                resolved_query, 
-                flags=re.IGNORECASE
+                r'`([^`]+)`\s+LIKE\s+([\'"][^\'\"]*[\'"])',
+                convert_like,
+                resolved_query,
+                flags=re.IGNORECASE,
             )
-            
+
             # Handle IN operator
             def convert_in(match):
                 column = match.group(1)
                 values = match.group(2)
                 return f"{column}.isin([{values}])"
-            
+
             resolved_query = re.sub(
-                r'`([^`]+)`\s+IN\s*\(([^)]+)\)', 
-                convert_in, 
-                resolved_query, 
-                flags=re.IGNORECASE
+                r"`([^`]+)`\s+IN\s*\(([^)]+)\)",
+                convert_in,
+                resolved_query,
+                flags=re.IGNORECASE,
             )
-            
+
             return resolved_query
-            
+
         except Exception as e:
             self.logger.error(f"Error converting WHERE clause '{where_clause}': {e}")
             return None
+
+    # Parallel processing methods for performance optimization
+    def _process_nodes_sequential(
+        self, df: pd.DataFrame, node_configs: List[Dict[str, Any]]
+    ) -> List[pd.DataFrame]:
+        """Process nodes sequentially (original behavior)."""
+        nodes_data = []
+        for node_config in node_configs:
+            try:
+                node_df = self._transform_node(df, node_config)
+                nodes_data.append(node_df)
+                self.logger.info(
+                    f"Processed node: {node_config['label']} ({len(node_df)} records)"
+                )
+            except Exception as e:
+                self.logger.error(f"Error processing node {node_config['label']}: {e}")
+                raise
+        return nodes_data
+
+    def _process_nodes_parallel(
+        self, df: pd.DataFrame, node_configs: List[Dict[str, Any]]
+    ) -> List[pd.DataFrame]:
+        """Process nodes in parallel using ThreadPoolExecutor.
+
+        Note: Uses threads instead of processes since DataMapper contains
+        non-serializable regex cache. This still provides parallelism for
+        I/O-bound operations.
+        """
+        self.logger.info(
+            f"Processing {len(node_configs)} nodes in parallel with "
+            f"{self.max_workers} workers"
+        )
+
+        nodes_data = [None] * len(node_configs)  # Preserve order
+
+        with ThreadPoolExecutor(max_workers=self.max_workers) as executor:
+            # Submit all node processing tasks
+            future_to_index = {
+                executor.submit(self._transform_node_safe, df, node_config): i
+                for i, node_config in enumerate(node_configs)
+            }
+
+            # Collect results as they complete
+            for future in as_completed(future_to_index):
+                index = future_to_index[future]
+                node_config = node_configs[index]
+
+                try:
+                    node_df = future.result()
+                    nodes_data[index] = node_df
+                    self.logger.info(
+                        f"Processed node: {node_config['label']} "
+                        f"({len(node_df)} records)"
+                    )
+                except Exception as e:
+                    self.logger.error(
+                        f"Error processing node {node_config['label']}: {e}"
+                    )
+                    raise
+
+        return nodes_data
+
+    def _transform_node_safe(
+        self, df: pd.DataFrame, node_config: Dict[str, Any]
+    ) -> pd.DataFrame:
+        """Thread-safe wrapper for _transform_node."""
+        return self._transform_node(df, node_config)
+
+    def _process_relationships_parallel(
+        self,
+        df: pd.DataFrame,
+        rel_configs: List[Dict[str, Any]],
+        node_configs: List[Dict[str, Any]],
+    ) -> List[pd.DataFrame]:
+        """Process relationships in parallel using ThreadPoolExecutor."""
+        if not rel_configs:
+            return []
+
+        self.logger.info(
+            f"Processing {len(rel_configs)} relationships in parallel with "
+            f"{self.max_workers} workers"
+        )
+
+        relationships_data = [None] * len(rel_configs)  # Preserve order
+
+        with ThreadPoolExecutor(max_workers=self.max_workers) as executor:
+            # Submit all relationship processing tasks
+            future_to_index = {
+                executor.submit(
+                    self._transform_relationship_safe, df, rel_config, node_configs
+                ): i
+                for i, rel_config in enumerate(rel_configs)
+            }
+
+            # Collect results as they complete
+            for future in as_completed(future_to_index):
+                index = future_to_index[future]
+                rel_config = rel_configs[index]
+
+                try:
+                    rel_df = future.result()
+                    relationships_data[index] = rel_df
+                    self.logger.info(
+                        f"Processed relationship: {rel_config['type']} "
+                        f"({len(rel_df)} records)"
+                    )
+                except Exception as e:
+                    self.logger.error(
+                        f"Error processing relationship {rel_config['type']}: {e}"
+                    )
+                    raise
+
+        return relationships_data
+
+    def _transform_relationship_safe(
+        self,
+        df: pd.DataFrame,
+        rel_config: Dict[str, Any],
+        node_configs: List[Dict[str, Any]],
+    ) -> pd.DataFrame:
+        """Thread-safe wrapper for _transform_relationship."""
+        return self._transform_relationship(df, rel_config, node_configs)
