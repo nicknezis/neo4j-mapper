@@ -10,7 +10,7 @@ class DataReaderFactory:
 
     @staticmethod
     def create_reader(
-        config: Dict[str, Any],
+        config: Dict[str, Any], chunk_size: int = 10000
     ) -> Union[SQLiteReader, CSVReader, "MixedDataReader"]:
         """Create appropriate reader based on configuration."""
         databases = config.get("databases", [])
@@ -24,7 +24,7 @@ class DataReaderFactory:
             return MixedDataReader(databases, csv_sources)
         elif has_databases:
             # SQLite only
-            return SQLiteReader(databases)
+            return SQLiteReader(databases, chunk_size)
         elif has_csv_sources:
             # CSV only
             return CSVReader(csv_sources)

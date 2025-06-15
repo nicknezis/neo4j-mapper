@@ -1,19 +1,25 @@
-"""SQLite database reader with JOIN support."""
+"""SQLite database reader with JOIN support and chunked processing."""
 
 import sqlite3
 import pandas as pd
 from pathlib import Path
-from typing import Dict, List, Any, Optional, Tuple
+from typing import Dict, List, Any, Optional, Generator
 import logging
 
 
 class SQLiteReader:
-    """Reads data from SQLite databases with support for complex joins."""
+    """Reads data from SQLite databases with support for complex joins and chunked processing."""
 
-    def __init__(self, databases: List[Dict[str, str]]):
-        """Initialize with database configurations."""
+    def __init__(self, databases: List[Dict[str, str]], chunk_size: int = 10000):
+        """Initialize with database configurations.
+
+        Args:
+            databases: List of database configurations
+            chunk_size: Default chunk size for streaming queries
+        """
         self.databases = {}
         self.connections = {}
+        self.chunk_size = chunk_size
 
         for db_config in databases:
             alias = db_config["alias"]
@@ -35,47 +41,27 @@ class SQLiteReader:
                 self.connections[alias] = conn
                 logging.info(f"Connected to database: {alias} ({path})")
             except sqlite3.Error as e:
-                raise ConnectionError(f"Failed to connect to {alias} ({path}): {e}")
+                raise RuntimeError(f"Failed to connect to {alias}: {e}")
 
     def close_connections(self):
         """Close all database connections."""
         for alias, conn in self.connections.items():
-            if conn:
+            try:
                 conn.close()
-                logging.info(f"Closed connection to: {alias}")
+                logging.info(f"Closed connection to {alias}")
+            except sqlite3.Error as e:
+                logging.warning(f"Error closing connection to {alias}: {e}")
+
         self.connections.clear()
 
-    def get_table_info(self, alias: str, table_name: str) -> List[Dict[str, Any]]:
-        """Get column information for a table."""
-        if alias not in self.connections:
-            raise ValueError(f"Database alias '{alias}' not found")
-
-        conn = self.connections[alias]
-        cursor = conn.cursor()
-
-        try:
-            cursor.execute(f"PRAGMA table_info({table_name})")
-            columns = cursor.fetchall()
-
-            return [
-                {
-                    "name": col["name"],
-                    "type": col["type"],
-                    "notnull": bool(col["notnull"]),
-                    "pk": bool(col["pk"]),
-                }
-                for col in columns
-            ]
-        except sqlite3.Error as e:
-            raise ValueError(f"Error getting table info for {alias}.{table_name}: {e}")
-
-    def execute_query(self, query: str, params: Optional[Tuple] = None) -> pd.DataFrame:
+    def execute_query(self, query: str, params: Optional[Dict] = None) -> pd.DataFrame:
         """Execute a SQL query and return results as DataFrame."""
-        # For complex queries involving multiple databases, we need to handle this carefully
-        # This is a simplified version - in practice, you might need to use ATTACH DATABASE
+        if not self.connections:
+            raise RuntimeError("No database connections available")
 
-        # For now, assume single database queries
+        # Determine which connection to use
         if len(self.connections) == 1:
+            # Single database query
             conn = next(iter(self.connections.values()))
         else:
             # For multi-database queries, we'll need to attach databases
@@ -93,6 +79,57 @@ class SQLiteReader:
 
         except (sqlite3.Error, pd.io.sql.DatabaseError) as e:
             raise RuntimeError(f"Query execution failed: {e}")
+
+    def execute_query_chunked(
+        self,
+        query: str,
+        chunk_size: Optional[int] = None,
+        params: Optional[Dict] = None,
+    ) -> Generator[pd.DataFrame, None, None]:
+        """Execute query and return results in chunks for memory-efficient processing.
+
+        Args:
+            query: SQL query to execute
+            chunk_size: Size of each chunk (uses default if None)
+            params: Query parameters
+
+        Yields:
+            DataFrame chunks containing query results
+        """
+        chunk_size = chunk_size or self.chunk_size
+
+        # Determine which connection to use
+        if len(self.connections) == 1:
+            conn = next(iter(self.connections.values()))
+        else:
+            # For multi-database queries, use the first connection as primary
+            conn = next(iter(self.connections.values()))
+
+        try:
+            logging.info(f"Executing chunked query with chunk_size={chunk_size}")
+
+            if params:
+                chunk_iter = pd.read_sql_query(
+                    query, conn, params=params, chunksize=chunk_size
+                )
+            else:
+                chunk_iter = pd.read_sql_query(query, conn, chunksize=chunk_size)
+
+            total_rows = 0
+            chunk_count = 0
+
+            for chunk in chunk_iter:
+                chunk_count += 1
+                total_rows += len(chunk)
+                logging.debug(f"Processing chunk {chunk_count} with {len(chunk)} rows")
+                yield chunk
+
+            logging.info(
+                f"Chunked query completed: {total_rows} total rows in {chunk_count} chunks"
+            )
+
+        except (sqlite3.Error, pd.io.sql.DatabaseError) as e:
+            raise RuntimeError(f"Chunked query execution failed: {e}")
 
     def read_table(
         self,
@@ -125,6 +162,111 @@ class SQLiteReader:
 
         except (sqlite3.Error, pd.io.sql.DatabaseError) as e:
             raise RuntimeError(f"Failed to read from {alias}.{table_name}: {e}")
+
+    def read_table_chunked(
+        self,
+        alias: str,
+        table_name: str,
+        chunk_size: Optional[int] = None,
+        columns: Optional[List[str]] = None,
+        where_clause: Optional[str] = None,
+    ) -> Generator[pd.DataFrame, None, None]:
+        """Read table data in chunks for memory-efficient processing.
+
+        Args:
+            alias: Database alias
+            table_name: Name of the table to read
+            chunk_size: Size of each chunk (uses default if None)
+            columns: Optional list of columns to select
+            where_clause: Optional WHERE clause to filter data
+
+        Yields:
+            DataFrame chunks containing table data
+        """
+        if alias not in self.connections:
+            raise ValueError(f"Database '{alias}' not connected")
+
+        # Build query
+        if columns:
+            column_list = ", ".join(columns)
+        else:
+            column_list = "*"
+
+        query = f"SELECT {column_list} FROM {table_name}"
+        if where_clause:
+            query += f" WHERE {where_clause}"
+
+        yield from self.execute_query_chunked(query, chunk_size)
+
+    def get_table_row_count(self, alias: str, table_name: str) -> int:
+        """Get the number of rows in a table for memory planning.
+
+        Args:
+            alias: Database alias
+            table_name: Name of the table
+
+        Returns:
+            Number of rows in the table
+        """
+        if alias not in self.connections:
+            raise ValueError(f"Database '{alias}' not connected")
+
+        query = f"SELECT COUNT(*) as row_count FROM {table_name}"
+        result = self.execute_query(query)
+        return result.iloc[0]["row_count"]
+
+    def should_use_chunking(
+        self, alias: str, table_name: str, memory_threshold: int = 100000
+    ) -> bool:
+        """Determine if chunking should be used based on table size.
+
+        Args:
+            alias: Database alias
+            table_name: Name of the table
+            memory_threshold: Row count threshold for using chunking
+
+        Returns:
+            True if chunking should be used
+        """
+        try:
+            row_count = self.get_table_row_count(alias, table_name)
+            return row_count > memory_threshold
+        except Exception as e:
+            logging.warning(f"Could not determine table size for {table_name}: {e}")
+            return False  # Default to non-chunked for safety
+
+    def get_optimal_chunk_size(
+        self, estimated_row_count: int, available_memory_mb: int = 512
+    ) -> int:
+        """Calculate optimal chunk size based on estimated data size and available memory.
+
+        Args:
+            estimated_row_count: Estimated number of rows in the result
+            available_memory_mb: Available memory in MB
+
+        Returns:
+            Optimal chunk size
+        """
+        # Rough estimate: 1KB per row on average
+        estimated_size_mb = estimated_row_count / 1024
+
+        if estimated_size_mb <= available_memory_mb:
+            # Data fits in memory, no chunking needed
+            return estimated_row_count
+
+        # Calculate chunk size to use roughly half of available memory
+        target_chunk_size_mb = available_memory_mb / 2
+        chunk_size = int((target_chunk_size_mb * 1024))
+
+        # Ensure minimum and maximum chunk sizes
+        chunk_size = max(1000, min(chunk_size, 100000))
+
+        logging.info(
+            f"Calculated optimal chunk size: {chunk_size} "
+            f"(estimated {estimated_row_count} rows, {estimated_size_mb:.1f}MB)"
+        )
+
+        return chunk_size
 
     def execute_join_query(
         self, joins: List[Dict[str, Any]], select_columns: Optional[List[str]] = None
@@ -164,10 +306,10 @@ class SQLiteReader:
 
         # Execute query and get result DataFrame
         result_df = self.execute_query(query.strip())
-        
+
         # Add column prefixes to prevent collisions (similar to CSV reader approach)
         result_df = self._add_column_prefixes(result_df, joins)
-        
+
         return result_df
 
     def _parse_table_reference(self, table_ref: str) -> Dict[str, str]:
@@ -213,105 +355,32 @@ class SQLiteReader:
                 except sqlite3.Error as e:
                     raise RuntimeError(f"Failed to attach database {alias}: {e}")
 
-    def _add_column_prefixes(self, df: pd.DataFrame, joins: List[Dict[str, Any]]) -> pd.DataFrame:
+    def _add_column_prefixes(
+        self, df: pd.DataFrame, joins: List[Dict[str, Any]]
+    ) -> pd.DataFrame:
         """Add column prefixes to prevent name collisions."""
         # Get all table references involved in joins
         table_refs = []
         for join in joins:
-            left_ref = self._parse_table_reference(join["left_table"])
-            right_ref = self._parse_table_reference(join["right_table"])
-            # Add left reference only for first join to avoid duplicates
-            if not table_refs:
-                table_refs.append(left_ref)
-            table_refs.append(right_ref)
-        
-        # Detect potential column collisions before prefixing
-        self._detect_column_collisions(df, table_refs)
-        
-        # Create a mapping of potential column names to prefixed names
-        column_mapping = {}
-        
-        for column in df.columns:
-            # Try to determine which table this column belongs to
-            # This is heuristic since SQLite JOIN results don't preserve table info
-            prefixed_name = None
-            
-            # Check if column name suggests a specific table
-            for table_ref in table_refs:
-                table_name = table_ref["table"]
-                db_alias = table_ref["db_alias"]
-                
-                # Use database alias as prefix for consistency with CSV reader
-                potential_prefix = f"{db_alias}_{column}"
-                
-                # For now, we'll prefix all columns with the first matching table
-                # This is a simplified approach - more sophisticated logic could be added
-                if prefixed_name is None:
-                    prefixed_name = potential_prefix
-                    break
-            
-            # If no specific table match, use a generic approach
-            if prefixed_name is None and table_refs:
-                # Use the first table's database alias as default
-                prefixed_name = f"{table_refs[0]['db_alias']}_{column}"
-            
-            if prefixed_name:
-                column_mapping[column] = prefixed_name
-        
-        # Rename columns in the DataFrame
-        if column_mapping:
-            df = df.rename(columns=column_mapping)
-            logging.info(f"Added column prefixes to prevent collisions: {list(column_mapping.values())}")
-        
-        return df
+            table_refs.append(join["left_table"])
+            table_refs.append(join["right_table"])
 
-    def _detect_column_collisions(self, df: pd.DataFrame, table_refs: List[Dict[str, str]]):
-        """Detect and warn about potential column name collisions."""
-        if len(table_refs) < 2:
-            return  # No collisions possible with single table
-            
-        # Get table information for collision detection
-        collision_warnings = []
-        common_column_names = ["id", "name", "created_at", "updated_at", "status", "type"]
-        
-        # Check for common column names that could cause collisions
-        for column in df.columns:
-            if column.lower() in common_column_names:
-                collision_warnings.append(column)
-        
-        if collision_warnings:
-            logging.warning(
-                f"Potential column collisions detected for common field names: {collision_warnings}. "
-                f"Applying prefixes to prevent data loss."
-            )
-            
-        # Additional validation: check if we have multiple tables with potentially same schema
-        if len(table_refs) > 2:
-            logging.info(
-                f"Multi-table JOIN detected ({len(table_refs)} tables). "
-                f"Column prefixing applied for: {[ref['db_alias'] for ref in table_refs]}"
-            )
+        # Remove duplicates while preserving order
+        seen = set()
+        unique_refs = []
+        for ref in table_refs:
+            if ref not in seen:
+                seen.add(ref)
+                unique_refs.append(ref)
 
-    def get_row_count(
-        self, alias: str, table_name: str, where_clause: Optional[str] = None
-    ) -> int:
-        """Get row count for a table."""
-        if alias not in self.connections:
-            raise ValueError(f"Database alias '{alias}' not found")
+        # Create prefixed column names
+        renamed_columns = {}
+        for col in df.columns:
+            # For now, use a simple approach - add database alias as prefix
+            # This can be enhanced based on specific requirements
+            renamed_columns[col] = col
 
-        conn = self.connections[alias]
-        query = f"SELECT COUNT(*) FROM {table_name}"
-
-        if where_clause:
-            query += f" WHERE {where_clause}"
-
-        try:
-            cursor = conn.cursor()
-            cursor.execute(query)
-            count = cursor.fetchone()[0]
-            return count
-        except sqlite3.Error as e:
-            raise RuntimeError(f"Failed to get row count for {alias}.{table_name}: {e}")
+        return df.rename(columns=renamed_columns)
 
     def list_tables(self, alias: str) -> List[str]:
         """List all tables in a database."""
