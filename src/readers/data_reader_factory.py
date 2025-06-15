@@ -21,13 +21,13 @@ class DataReaderFactory:
 
         if has_databases and has_csv_sources:
             # Mixed data sources - use MixedDataReader
-            return MixedDataReader(databases, csv_sources)
+            return MixedDataReader(databases, csv_sources, chunk_size)
         elif has_databases:
             # SQLite only
             return SQLiteReader(databases, chunk_size)
         elif has_csv_sources:
             # CSV only
-            return CSVReader(csv_sources)
+            return CSVReader(csv_sources, chunk_size)
         else:
             raise ValueError("No data sources found in configuration")
 
@@ -36,11 +36,11 @@ class MixedDataReader:
     """Reader that handles both SQLite databases and CSV sources."""
 
     def __init__(
-        self, databases: List[Dict[str, str]], csv_sources: List[Dict[str, Any]]
+        self, databases: List[Dict[str, str]], csv_sources: List[Dict[str, Any]], chunk_size: int = 10000
     ):
         """Initialize with both SQLite and CSV configurations."""
-        self.sqlite_reader = SQLiteReader(databases) if databases else None
-        self.csv_reader = CSVReader(csv_sources) if csv_sources else None
+        self.sqlite_reader = SQLiteReader(databases, chunk_size) if databases else None
+        self.csv_reader = CSVReader(csv_sources, chunk_size) if csv_sources else None
 
         # Create a mapping of all aliases to their reader type
         self.alias_to_reader = {}
