@@ -11,11 +11,13 @@ from .data_mapper import DataMapper
 class GraphTransformer:
     """Transforms relational data into graph format for Neo4j."""
 
-    def __init__(self, enable_parallel: bool = True, max_workers: Optional[int] = None):
+    def __init__(self, enable_parallel: bool = True, max_workers: Optional[int] = None, 
+                 memory_efficient: bool = True):
         self.data_mapper = DataMapper()
         self.logger = logging.getLogger(__name__)
         self.enable_parallel = enable_parallel
         self.max_workers = max_workers or min(multiprocessing.cpu_count(), 4)
+        self.memory_efficient = memory_efficient
 
     def transform_mapping(
         self, df: pd.DataFrame, mapping_config: Dict[str, Any]
@@ -68,8 +70,10 @@ class GraphTransformer:
                 f"{len(df)} -> {len(filtered_df)} records"
             )
 
-        # Map properties according to configuration
-        mapped_df = self.data_mapper.map_node_properties(filtered_df, node_config)
+        # Map properties according to configuration (use in-place for memory efficiency)
+        mapped_df = self.data_mapper.map_node_properties(
+            filtered_df, node_config, inplace=self.memory_efficient
+        )
 
         # Extract unique node data
         node_df = self.data_mapper.extract_node_data(mapped_df, node_config)
@@ -98,9 +102,9 @@ class GraphTransformer:
                 f"{len(df)} -> {len(filtered_df)} records"
             )
 
-        # Map relationship properties
+        # Map relationship properties (use in-place for memory efficiency)
         mapped_df = self.data_mapper.map_relationship_properties(
-            filtered_df, rel_config
+            filtered_df, rel_config, inplace=self.memory_efficient
         )
 
         # Extract relationship data
@@ -117,10 +121,19 @@ class GraphTransformer:
         return rel_df
 
     def _add_computed_properties(
-        self, df: pd.DataFrame, computed_props: List[Dict[str, Any]]
+        self, df: pd.DataFrame, computed_props: List[Dict[str, Any]], inplace: bool = True
     ) -> pd.DataFrame:
-        """Add computed properties to the DataFrame."""
-        result_df = df.copy()
+        """Add computed properties to the DataFrame.
+        
+        Args:
+            df: Input DataFrame
+            computed_props: List of computed property configurations
+            inplace: If True, modify df in-place to save memory (default: True)
+        """
+        if inplace:
+            result_df = df
+        else:
+            result_df = df.copy()
 
         for comp_prop in computed_props:
             prop_name = comp_prop["name"]

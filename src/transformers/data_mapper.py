@@ -38,10 +38,19 @@ class DataMapper:
         }
 
     def map_node_properties(
-        self, df: pd.DataFrame, node_config: Dict[str, Any]
+        self, df: pd.DataFrame, node_config: Dict[str, Any], inplace: bool = False
     ) -> pd.DataFrame:
-        """Map DataFrame columns to node properties according to configuration."""
-        result_df = df.copy()
+        """Map DataFrame columns to node properties according to configuration.
+        
+        Args:
+            df: Input DataFrame
+            node_config: Node configuration
+            inplace: If True, modify df in-place to save memory (default: False)
+        """
+        if inplace:
+            result_df = df
+        else:
+            result_df = df.copy()
 
         # Get source table/alias information
         source = node_config.get("source", "")
@@ -121,10 +130,19 @@ class DataMapper:
         return result_df
 
     def map_relationship_properties(
-        self, df: pd.DataFrame, rel_config: Dict[str, Any]
+        self, df: pd.DataFrame, rel_config: Dict[str, Any], inplace: bool = False
     ) -> pd.DataFrame:
-        """Map DataFrame columns to relationship properties."""
-        result_df = df.copy()
+        """Map DataFrame columns to relationship properties.
+        
+        Args:
+            df: Input DataFrame
+            rel_config: Relationship configuration
+            inplace: If True, modify df in-place to save memory (default: False)
+        """
+        if inplace:
+            result_df = df
+        else:
+            result_df = df.copy()
 
         if "properties" not in rel_config:
             return result_df
@@ -235,7 +253,7 @@ class DataMapper:
         # Extract unique nodes
         node_df = df[columns_to_select].drop_duplicates(subset=[resolved_id_field])
 
-        # Add node label
+        # Add node label and ID (copy back original approach to fix assignment)
         node_df = node_df.copy()
         node_df["_label"] = node_config["label"]
         node_df["_id"] = node_df[resolved_id_field]
@@ -292,9 +310,8 @@ class DataMapper:
                 if resolved_field:
                     columns_to_select.append(resolved_field)
 
-        # Extract relationships
-        rel_df = df[columns_to_select].copy()
-        rel_df = rel_df.dropna(subset=[resolved_from_id, resolved_to_id])
+        # Extract relationships (combine operations to avoid extra copy)
+        rel_df = df[columns_to_select].dropna(subset=[resolved_from_id, resolved_to_id])
 
         # Add relationship metadata
         rel_df["_type"] = rel_config["type"]
@@ -448,7 +465,7 @@ class DataMapper:
                 else:
                     # Group doesn't exist, apply fallback
                     if fallback_strategy == "original":
-                        result[group_name] = series.copy()
+                        result[group_name] = series  # No need to copy for fallback
                     elif fallback_strategy == "null":
                         result[group_name] = pd.Series(
                             [None] * len(series), index=series.index
@@ -491,12 +508,12 @@ class DataMapper:
             else:
                 # Invalid group number, apply fallback
                 if fallback_strategy == "original":
-                    return series.copy()
+                    return series  # No need to copy for fallback
                 elif fallback_strategy == "null":
                     return pd.Series([None] * len(series), index=series.index)
                 elif fallback_strategy == "empty":
                     return pd.Series([""] * len(series), index=series.index)
-                return series.copy()
+                return series  # No need to copy for fallback
 
             # Apply fallback strategy for non-matches
             if fallback_strategy == "original":
@@ -566,7 +583,7 @@ class DataMapper:
                 else:
                     # Group doesn't exist, apply fallback
                     if fallback_strategy == "original":
-                        result[group_name] = series.copy()
+                        result[group_name] = series  # No need to copy for fallback
                     elif fallback_strategy == "null":
                         result[group_name] = pd.Series(
                             [None] * len(series), index=series.index
