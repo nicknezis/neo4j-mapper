@@ -151,9 +151,8 @@ class GraphTransformer:
 
                 # Apply type conversion
                 if prop_type in self.data_mapper.TYPE_CONVERTERS:
-                    converter = self.data_mapper.TYPE_CONVERTERS[prop_type]
-                    result_df[prop_name] = result_df[prop_name].apply(
-                        lambda x: self.data_mapper._safe_convert(x, converter)
+                    result_df[prop_name] = self.data_mapper._convert_series_vectorized(
+                        result_df[prop_name], prop_type
                     )
 
                 self.logger.info(f"Added computed property: {prop_name}")

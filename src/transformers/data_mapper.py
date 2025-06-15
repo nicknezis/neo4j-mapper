@@ -25,6 +25,17 @@ class DataMapper:
     def __init__(self):
         self.logger = logging.getLogger(__name__)
         self._regex_cache = {}
+        
+        # Vectorized type conversion methods
+        self.VECTORIZED_CONVERTERS = {
+            "string": self._convert_to_string_vectorized,
+            "integer": self._convert_to_integer_vectorized,
+            "float": self._convert_to_float_vectorized,
+            "boolean": self._convert_to_boolean_vectorized,
+            "datetime": self._convert_to_datetime_vectorized,
+            "date": self._convert_to_date_vectorized,
+            "time": self._convert_to_time_vectorized,
+        }
 
     def map_node_properties(
         self, df: pd.DataFrame, node_config: Dict[str, Any]
@@ -69,9 +80,8 @@ class DataMapper:
                             result_df[ext_field] = ext_values
                             # Apply type conversion to extracted fields
                             if field_type in self.TYPE_CONVERTERS:
-                                converter = self.TYPE_CONVERTERS[field_type]
-                                result_df[ext_field] = result_df[ext_field].apply(
-                                    lambda x: self._safe_convert(x, converter)
+                                result_df[ext_field] = self._convert_series_vectorized(
+                                    result_df[ext_field], field_type
                                 )
                             property_mappings[ext_field] = field_type
                     else:
@@ -79,9 +89,8 @@ class DataMapper:
                         result_df[field_name] = extracted_data
                         # Apply type conversion
                         if field_type in self.TYPE_CONVERTERS:
-                            converter = self.TYPE_CONVERTERS[field_type]
-                            result_df[field_name] = result_df[field_name].apply(
-                                lambda x: self._safe_convert(x, converter)
+                            result_df[field_name] = self._convert_series_vectorized(
+                                result_df[field_name], field_type
                             )
                         property_mappings[field_name] = field_type
 
@@ -94,9 +103,8 @@ class DataMapper:
                 # Apply type conversion without extraction
                 try:
                     if field_type in self.TYPE_CONVERTERS:
-                        converter = self.TYPE_CONVERTERS[field_type]
-                        result_df[field_name] = result_df[field_name].apply(
-                            lambda x: self._safe_convert(x, converter)
+                        result_df[field_name] = self._convert_series_vectorized(
+                            result_df[field_name], field_type
                         )
 
                     property_mappings[field_name] = field_type
@@ -816,3 +824,109 @@ class DataMapper:
                     extracted_values.append(value)
 
         return pd.Series(extracted_values, index=series.index)
+    # Vectorized type conversion methods for performance optimization
+    def _convert_to_string_vectorized(self, series: pd.Series) -> pd.Series:
+        """Convert series to string using vectorized operations."""
+        try:
+            # Use pandas astype for fast string conversion
+            return series.astype(str).where(series.notna(), None)
+        except Exception as e:
+            self.logger.warning(f"Vectorized string conversion failed: {e}")
+            return series.apply(lambda x: self._safe_convert(x, str))
+
+    def _convert_to_integer_vectorized(self, series: pd.Series) -> pd.Series:
+        """Convert series to integer using vectorized operations."""
+        try:
+            # Use pd.to_numeric with errors='coerce' for fast numeric conversion
+            numeric_series = pd.to_numeric(series, errors='coerce')
+            
+            # Convert to integer, preserving NaN values
+            return numeric_series.astype('Int64')  # Nullable integer type
+        except Exception as e:
+            self.logger.warning(f"Vectorized integer conversion failed: {e}")
+            return series.apply(lambda x: self._safe_convert(x, int))
+
+    def _convert_to_float_vectorized(self, series: pd.Series) -> pd.Series:
+        """Convert series to float using vectorized operations."""
+        try:
+        # Use pd.to_numeric for fast float conversion
+            return pd.to_numeric(series, errors='coerce')
+        except Exception as e:
+            self.logger.warning(f"Vectorized float conversion failed: {e}")
+            return series.apply(lambda x: self._safe_convert(x, float))
+
+    def _convert_to_boolean_vectorized(self, series: pd.Series) -> pd.Series:
+        """Convert series to boolean using vectorized operations."""
+        try:
+            # Handle common boolean representations
+            str_series = series.astype(str).str.lower()
+            
+            # Define true/false mappings
+            true_values = {'true', '1', 'yes', 'y', 't', 'on'}
+            false_values = {'false', '0', 'no', 'n', 'f', 'off'}
+            
+            # Create boolean mask
+            is_true = str_series.isin(true_values)
+            is_false = str_series.isin(false_values)
+            is_valid = is_true | is_false
+            
+            # Convert to boolean, setting invalid values to None
+            result = pd.Series(index=series.index, dtype='boolean')
+            result.loc[is_true] = True
+            result.loc[is_false] = False
+            result.loc[~is_valid] = None
+            
+            # Preserve original NaN values
+            result.loc[series.isna()] = None
+            
+            return result
+        except Exception as e:
+            self.logger.warning(f"Vectorized boolean conversion failed: {e}")
+            return series.apply(lambda x: self._safe_convert(x, bool))
+
+    def _convert_to_datetime_vectorized(self, series: pd.Series) -> pd.Series:
+        """Convert series to datetime using vectorized operations."""
+        try:
+        # Use pd.to_datetime for fast datetime conversion
+            return pd.to_datetime(series, errors='coerce')
+        except Exception as e:
+            self.logger.warning(f"Vectorized datetime conversion failed: {e}")
+            return series.apply(lambda x: self._safe_convert(x, pd.to_datetime))
+
+    def _convert_to_date_vectorized(self, series: pd.Series) -> pd.Series:
+        """Convert series to date using vectorized operations."""
+        try:
+            # Convert to datetime first, then extract date
+            datetime_series = pd.to_datetime(series, errors='coerce')
+            return datetime_series.dt.date.where(datetime_series.notna(), None)
+        except Exception as e:
+            self.logger.warning(f"Vectorized date conversion failed: {e}")
+            return series.apply(lambda x: self._safe_convert(x, lambda y: pd.to_datetime(y).date()))
+
+    def _convert_to_time_vectorized(self, series: pd.Series) -> pd.Series:
+        """Convert series to time using vectorized operations."""
+        try:
+            # Convert to datetime first, then extract time
+            datetime_series = pd.to_datetime(series, errors='coerce', infer_datetime_format=True)
+            return datetime_series.dt.time.where(datetime_series.notna(), None)
+        except Exception as e:
+            self.logger.warning(f"Vectorized time conversion failed: {e}")
+            return series.apply(lambda x: self._safe_convert(x, lambda y: pd.to_datetime(y).time()))
+
+    def _convert_series_vectorized(self, series: pd.Series, field_type: str) -> pd.Series:
+        """Convert series using vectorized operations with fallback to apply()."""
+        if field_type in self.VECTORIZED_CONVERTERS:
+            try:
+                return self.VECTORIZED_CONVERTERS[field_type](series)
+            except Exception as e:
+                self.logger.warning(
+                    f"Vectorized conversion failed for type '{field_type}': {e}. "
+                    f"Falling back to apply() method."
+                )
+        
+        # Fallback to original apply() method
+        if field_type in self.TYPE_CONVERTERS:
+            converter = self.TYPE_CONVERTERS[field_type]
+            return series.apply(lambda x: self._safe_convert(x, converter))
+        
+        return series
