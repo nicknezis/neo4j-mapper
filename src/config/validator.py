@@ -189,6 +189,10 @@ class ConfigValidator:
                 f"Must be one of: {', '.join(self.VALID_TYPES)}"
             )
         
+        # Validate name field if present (optional Neo4j property name)
+        if "name" in prop:
+            self._validate_property_name(prop["name"], f"{context}.name")
+        
         # Validate extractor configuration if present
         if "extractor" in prop:
             self._validate_extractor(prop["extractor"], f"{context}.extractor")
@@ -301,6 +305,37 @@ class ConfigValidator:
                 raise ValueError(
                     f"Potentially dangerous SQL keyword '{keyword}' found in WHERE clause: {context}"
                 )
+
+    def _validate_property_name(self, name: str, context: str):
+        """Validate Neo4j property name field."""
+        if not isinstance(name, str):
+            raise ValueError(f"Property name in {context} must be a string")
+        
+        if not name.strip():
+            raise ValueError(f"Property name in {context} cannot be empty")
+        
+        # Check for valid Neo4j property name format
+        # Allow alphanumeric, underscore, and camelCase
+        if not re.match(r"^[a-zA-Z_][a-zA-Z0-9_]*$", name):
+            raise ValueError(
+                f"Invalid property name '{name}' in {context}. "
+                f"Property names must start with a letter or underscore and contain only "
+                f"alphanumeric characters and underscores"
+            )
+        
+        # Check for Neo4j reserved words (common ones)
+        neo4j_reserved = {
+            'id', 'type', 'start', 'end', 'length', 'rank', 'nodes', 'relationships',
+            'path', 'shortestpath', 'allshortestpaths', 'extract', 'filter', 'reduce',
+            'any', 'all', 'none', 'single', 'exists', 'size', 'head', 'tail', 'last',
+            'labels', 'keys', 'properties', 'distinct', 'count', 'sum', 'avg', 'min', 'max'
+        }
+        
+        if name.lower() in neo4j_reserved:
+            raise ValueError(
+                f"Property name '{name}' in {context} conflicts with Neo4j reserved word. "
+                f"Consider using a different name like '{name}_value' or '{name}Property'"
+            )
 
     def _validate_output(self, output: Dict[str, Any]):
         """Validate output configuration."""

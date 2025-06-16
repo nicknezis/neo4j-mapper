@@ -1,0 +1,126 @@
+# Property Name Mapping Example - Demonstrates renaming source columns to Neo4j property names
+# This example shows how to use the optional 'name' field to map source database columns to clean Neo4j property names
+
+databases:
+  - path: "data/users.db"
+    alias: "users_db"
+  - path: "data/departments.db"
+    alias: "dept_db"
+
+mappings:
+  - name: "user_property_mapping"
+    
+    # Join users with their department information
+    joins:
+      - type: "LEFT"
+        left_table: "users_db.users"
+        right_table: "dept_db.departments"
+        condition: "users_db.users.dept_id = dept_db.departments.id"
+    
+    nodes:
+      - label: "User"
+        source: "users_db.users"
+        id_field: "user_id"
+        properties:
+          # Map database column names to clean Neo4j property names
+          - field: "user_id"
+            name: "userId"              # userId instead of user_id
+            type: "integer"
+          - field: "first_name"
+            name: "firstName"           # firstName instead of first_name
+            type: "string"
+          - field: "last_name"
+            name: "lastName"            # lastName instead of last_name
+            type: "string"
+          - field: "email_address"
+            name: "email"               # email instead of email_address
+            type: "string"
+          - field: "date_of_birth"
+            name: "birthDate"           # birthDate instead of date_of_birth
+            type: "date"
+          - field: "created_timestamp"
+            name: "createdAt"           # createdAt instead of created_timestamp
+            type: "datetime"
+          - field: "is_active_user"
+            name: "isActive"            # isActive instead of is_active_user
+            type: "boolean"
+          - field: "user_salary"
+            name: "salary"              # salary instead of user_salary
+            type: "float"
+          
+          # Example with regex extractor and property renaming
+          - field: "full_address"
+            name: "addressComponents"   # Rename the extracted components
+            type: "string"
+            extractor:
+              type: "regex"
+              pattern: "(?P<street>.*),\\s*(?P<city>[^,]+),\\s*(?P<state>[A-Z]{2})\\s+(?P<zip>\\d{5})"
+              named_groups: true
+              fallback_strategy: "null"
+
+      - label: "Department"
+        source: "dept_db.departments"
+        id_field: "dept_id"
+        properties:
+          - field: "dept_id"
+            name: "departmentId"        # departmentId instead of dept_id
+            type: "string"
+          - field: "dept_name"
+            name: "name"                # name instead of dept_name
+            type: "string"
+          - field: "dept_budget"
+            name: "budget"              # budget instead of dept_budget
+            type: "float"
+          - field: "dept_manager_id"
+            name: "managerId"           # managerId instead of dept_manager_id
+            type: "integer"
+          - field: "created_date"
+            name: "establishedDate"     # establishedDate instead of created_date
+            type: "date"
+
+      # Example showing properties without renaming (backward compatibility)
+      - label: "Office"
+        source: "dept_db.offices"
+        id_field: "id"
+        properties:
+          - field: "id"                 # No 'name' field - uses original column name
+            type: "integer"
+          - field: "location"           # No 'name' field - uses original column name
+            type: "string"
+          - field: "capacity"           # No 'name' field - uses original column name
+            type: "integer"
+
+    relationships:
+      - type: "WORKS_IN"
+        from_node: "User"
+        to_node: "Department"
+        properties:
+          # Relationship properties can also be renamed
+          - field: "start_date"
+            name: "startDate"           # startDate instead of start_date
+            type: "date"
+          - field: "position_title"
+            name: "title"               # title instead of position_title
+            type: "string"
+          - field: "employment_type"
+            name: "employmentType"      # employmentType instead of employment_type
+            type: "string"
+          
+          # Example with regex extractor on relationship property
+          - field: "work_schedule"
+            name: "scheduleType"        # Rename extracted schedule type
+            type: "string"
+            extractor:
+              type: "regex"
+              pattern: "(Full-time|Part-time|Contract|Intern)"
+              group: 1
+              fallback_strategy: "original"
+
+      - type: "MANAGES"
+        from_node: "User"
+        to_node: "Department"
+        # Example relationship with no properties - just connecting nodes
+
+output:
+  format: "csv"
+  directory: "output"

@@ -60,6 +60,8 @@ class DataMapper:
         for prop_config in node_config["properties"]:
             field_name = prop_config["field"]
             field_type = prop_config["type"]
+            # Get Neo4j property name (use 'name' field if provided, otherwise use 'field')
+            neo4j_property_name = prop_config.get("name", field_name)
 
             # Resolve column name - use source from node config for better resolution
             actual_column = self._resolve_column_name(df, field_name, source)
@@ -92,16 +94,23 @@ class DataMapper:
                                 result_df[ext_field] = self._convert_series_vectorized(
                                     result_df[ext_field], field_type
                                 )
-                            property_mappings[ext_field] = field_type
+                            # For multiple extractions, use extracted field names as Neo4j property names
+                            property_mappings[ext_field] = {
+                                'neo4j_name': ext_field,
+                                'type': field_type
+                            }
                     else:
-                        # Single extraction - replace original field
-                        result_df[field_name] = extracted_data
+                        # Single extraction - use Neo4j property name
+                        result_df[neo4j_property_name] = extracted_data
                         # Apply type conversion
                         if field_type in self.TYPE_CONVERTERS:
-                            result_df[field_name] = self._convert_series_vectorized(
-                                result_df[field_name], field_type
+                            result_df[neo4j_property_name] = self._convert_series_vectorized(
+                                result_df[neo4j_property_name], field_type
                             )
-                        property_mappings[field_name] = field_type
+                        property_mappings[field_name] = {
+                            'neo4j_name': neo4j_property_name,
+                            'type': field_type
+                        }
 
                 except Exception as e:
                     self.logger.error(
@@ -111,12 +120,22 @@ class DataMapper:
             else:
                 # Apply type conversion without extraction
                 try:
+                    # Rename column to Neo4j property name if different
+                    if neo4j_property_name != field_name:
+                        result_df[neo4j_property_name] = result_df[field_name]
+                        # Drop original column if it's different from Neo4j name
+                        if field_name in result_df.columns and field_name != neo4j_property_name:
+                            result_df.drop(columns=[field_name], inplace=True)
+                    
                     if field_type in self.TYPE_CONVERTERS:
-                        result_df[field_name] = self._convert_series_vectorized(
-                            result_df[field_name], field_type
+                        result_df[neo4j_property_name] = self._convert_series_vectorized(
+                            result_df[neo4j_property_name], field_type
                         )
 
-                    property_mappings[field_name] = field_type
+                    property_mappings[field_name] = {
+                        'neo4j_name': neo4j_property_name,
+                        'type': field_type
+                    }
 
                 except Exception as e:
                     self.logger.error(
@@ -151,6 +170,8 @@ class DataMapper:
         for prop_config in rel_config["properties"]:
             field_name = prop_config["field"]
             field_type = prop_config["type"]
+            # Get Neo4j property name (use 'name' field if provided, otherwise use 'field')
+            neo4j_property_name = prop_config.get("name", field_name)
 
             # Resolve column name using the same logic as nodes
             actual_column = self._resolve_column_name(df, field_name, "")
@@ -183,17 +204,24 @@ class DataMapper:
                                 result_df[ext_field] = result_df[ext_field].apply(
                                     lambda x: self._safe_convert(x, converter)
                                 )
-                            property_mappings[ext_field] = field_type
+                            # For multiple extractions, use extracted field names as Neo4j property names
+                            property_mappings[ext_field] = {
+                                'neo4j_name': ext_field,
+                                'type': field_type
+                            }
                     else:
-                        # Single extraction - replace original field
-                        result_df[field_name] = extracted_data
+                        # Single extraction - use Neo4j property name
+                        result_df[neo4j_property_name] = extracted_data
                         # Apply type conversion
                         if field_type in self.TYPE_CONVERTERS:
                             converter = self.TYPE_CONVERTERS[field_type]
-                            result_df[field_name] = result_df[field_name].apply(
+                            result_df[neo4j_property_name] = result_df[neo4j_property_name].apply(
                                 lambda x: self._safe_convert(x, converter)
                             )
-                        property_mappings[field_name] = field_type
+                        property_mappings[field_name] = {
+                            'neo4j_name': neo4j_property_name,
+                            'type': field_type
+                        }
 
                 except Exception as e:
                     self.logger.error(
@@ -203,13 +231,23 @@ class DataMapper:
             else:
                 # Apply type conversion without extraction
                 try:
+                    # Rename column to Neo4j property name if different
+                    if neo4j_property_name != field_name:
+                        result_df[neo4j_property_name] = result_df[field_name]
+                        # Drop original column if it's different from Neo4j name
+                        if field_name in result_df.columns and field_name != neo4j_property_name:
+                            result_df.drop(columns=[field_name], inplace=True)
+                    
                     if field_type in self.TYPE_CONVERTERS:
                         converter = self.TYPE_CONVERTERS[field_type]
-                        result_df[field_name] = result_df[field_name].apply(
+                        result_df[neo4j_property_name] = result_df[neo4j_property_name].apply(
                             lambda x: self._safe_convert(x, converter)
                         )
 
-                    property_mappings[field_name] = field_type
+                    property_mappings[field_name] = {
+                        'neo4j_name': neo4j_property_name,
+                        'type': field_type
+                    }
 
                 except Exception as e:
                     self.logger.error(
@@ -229,37 +267,69 @@ class DataMapper:
         # Get source for column resolution
         source = node_config.get("source", "")
 
-        # Resolve ID field
+        # Resolve ID field - check if it was renamed during property mapping
         id_field = node_config["id_field"]
         resolved_id_field = self._resolve_column_name(df, id_field, source)
+        
+        # Check if ID field was renamed to a Neo4j property name
+        id_neo4j_name = None
+        for prop_config in node_config["properties"]:
+            if prop_config["field"] == id_field:
+                id_neo4j_name = prop_config.get("name", id_field)
+                break
+        
+        # Try to find the ID field - check both original and renamed versions
+        if resolved_id_field and resolved_id_field in df.columns:
+            actual_id_field = resolved_id_field
+        elif id_neo4j_name and id_neo4j_name in df.columns:
+            actual_id_field = id_neo4j_name
+        else:
+            raise ValueError(f"ID field '{id_field}' not found in DataFrame columns: {list(df.columns)}")
 
-        if resolved_id_field is None:
-            raise ValueError(f"ID field '{id_field}' not found in DataFrame")
-
-        # Resolve property fields
+        # Resolve property fields and build Neo4j property name mapping
         property_fields = []
+        neo4j_property_mapping = {}  # Maps source column -> Neo4j property name
         for prop_config in node_config["properties"]:
             field_name = prop_config["field"]
+            neo4j_property_name = prop_config.get("name", field_name)
             resolved_field = self._resolve_column_name(df, field_name, source)
             if resolved_field:
-                property_fields.append(resolved_field)
+                # Check if this is a mapped property with different Neo4j name
+                if neo4j_property_name in df.columns:
+                    # Property has been renamed during mapping, use Neo4j name
+                    property_fields.append(neo4j_property_name)
+                    neo4j_property_mapping[neo4j_property_name] = neo4j_property_name
+                else:
+                    # Use resolved source field name
+                    property_fields.append(resolved_field)
+                    neo4j_property_mapping[resolved_field] = neo4j_property_name
 
         # Select relevant columns
-        columns_to_select = [resolved_id_field] + property_fields
+        columns_to_select = [actual_id_field] + property_fields
 
         if not columns_to_select:
             raise ValueError(f"No valid columns found for node {node_config['label']}")
 
         # Extract unique nodes
-        node_df = df[columns_to_select].drop_duplicates(subset=[resolved_id_field])
+        node_df = df[columns_to_select].drop_duplicates(subset=[actual_id_field])
 
         # Add node label and ID (copy back original approach to fix assignment)
         node_df = node_df.copy()
         node_df["_label"] = node_config["label"]
-        node_df["_id"] = node_df[resolved_id_field]
+        node_df["_id"] = node_df[actual_id_field]
+        
+        # Rename columns to Neo4j property names if they haven't been renamed already
+        columns_to_rename = {}
+        for source_col, neo4j_name in neo4j_property_mapping.items():
+            if source_col in node_df.columns and source_col != neo4j_name:
+                columns_to_rename[source_col] = neo4j_name
+        
+        if columns_to_rename:
+            node_df.rename(columns=columns_to_rename, inplace=True)
 
         self.logger.info(
-            f"Extracted {len(node_df)} unique nodes for label {node_config['label']}"
+            f"Extracted {len(node_df)} unique nodes for label {node_config['label']} "
+            f"with {len(neo4j_property_mapping)} mapped properties"
         )
         return node_df
 
@@ -301,14 +371,24 @@ class DataMapper:
         if resolved_to_id is None:
             raise ValueError(f"To ID field '{to_id_field}' not found in DataFrame")
 
-        # Collect relationship property columns
+        # Collect relationship property columns and build Neo4j property name mapping
         columns_to_select = [resolved_from_id, resolved_to_id]
+        neo4j_property_mapping = {}  # Maps source column -> Neo4j property name
         if "properties" in rel_config:
             for prop_config in rel_config["properties"]:
                 field_name = prop_config["field"]
+                neo4j_property_name = prop_config.get("name", field_name)
                 resolved_field = self._resolve_column_name(df, field_name, "")
                 if resolved_field:
-                    columns_to_select.append(resolved_field)
+                    # Check if this is a mapped property with different Neo4j name
+                    if neo4j_property_name in df.columns:
+                        # Property has been renamed during mapping, use Neo4j name
+                        columns_to_select.append(neo4j_property_name)
+                        neo4j_property_mapping[neo4j_property_name] = neo4j_property_name
+                    else:
+                        # Use resolved source field name
+                        columns_to_select.append(resolved_field)
+                        neo4j_property_mapping[resolved_field] = neo4j_property_name
 
         # Extract relationships (combine operations to avoid extra copy)
         rel_df = df[columns_to_select].dropna(subset=[resolved_from_id, resolved_to_id])
@@ -317,9 +397,19 @@ class DataMapper:
         rel_df["_type"] = rel_config["type"]
         rel_df["_from_id"] = rel_df[resolved_from_id]
         rel_df["_to_id"] = rel_df[resolved_to_id]
+        
+        # Rename columns to Neo4j property names if they haven't been renamed already
+        columns_to_rename = {}
+        for source_col, neo4j_name in neo4j_property_mapping.items():
+            if source_col in rel_df.columns and source_col != neo4j_name:
+                columns_to_rename[source_col] = neo4j_name
+        
+        if columns_to_rename:
+            rel_df.rename(columns=columns_to_rename, inplace=True)
 
         self.logger.info(
-            f"Extracted {len(rel_df)} relationships of type {rel_config['type']}"
+            f"Extracted {len(rel_df)} relationships of type {rel_config['type']} "
+            f"with {len(neo4j_property_mapping)} mapped properties"
         )
         return rel_df
 
@@ -866,7 +956,7 @@ class DataMapper:
     def _convert_to_float_vectorized(self, series: pd.Series) -> pd.Series:
         """Convert series to float using vectorized operations."""
         try:
-        # Use pd.to_numeric for fast float conversion
+            # Use pd.to_numeric for fast float conversion
             return pd.to_numeric(series, errors='coerce')
         except Exception as e:
             self.logger.warning(f"Vectorized float conversion failed: {e}")
@@ -904,7 +994,7 @@ class DataMapper:
     def _convert_to_datetime_vectorized(self, series: pd.Series) -> pd.Series:
         """Convert series to datetime using vectorized operations."""
         try:
-        # Use pd.to_datetime for fast datetime conversion
+            # Use pd.to_datetime for fast datetime conversion
             return pd.to_datetime(series, errors='coerce')
         except Exception as e:
             self.logger.warning(f"Vectorized datetime conversion failed: {e}")
