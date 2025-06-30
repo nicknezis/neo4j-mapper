@@ -92,6 +92,9 @@ mappings:
 
     relationships:
       - type: "WORKS_IN"
+        source: "users"
+        from_id_column: "user_id"
+        to_id_column: "dept_id"
         from_node: "User"
         to_node: "Department"
         properties:
@@ -117,6 +120,9 @@ mappings:
               fallback_strategy: "original"
 
       - type: "MANAGES"
+        source: "dept_db.departments"
+        from_id_column: "dept_manager_id"
+        to_id_column: "dept_id"
         from_node: "User"
         to_node: "Department"
         # Example relationship with no properties - just connecting nodes

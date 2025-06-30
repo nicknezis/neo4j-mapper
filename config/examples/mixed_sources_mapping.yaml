@@ -80,6 +80,9 @@ mappings:
     # Relationship definitions
     relationships:
       - type: "PLACED_ORDER"
+        source: "orders"
+        from_id_column: "user_id"
+        to_id_column: "order_id"
         from_node: "User"
         to_node: "Order"
         properties:

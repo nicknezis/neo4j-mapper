@@ -1,0 +1,136 @@
+# Example configuration demonstrating explicit relationship source specification
+# This shows how relationships can define their own data source, rather than
+# inheriting from node configurations
+
+databases:
+  - path: "data/hr_database.db"
+    alias: "hr"
+  - path: "data/projects_database.db"
+    alias: "projects"
+
+mappings:
+  # Example 1: Self-referencing relationships with explicit source
+  - name: "employee_hierarchy"
+    
+    nodes:
+      - label: "Employee"
+        source: "hr.employees"
+        id_field: "employee_id"
+        properties:
+          - field: "first_name"
+            name: "firstName"
+            type: "string"
+          - field: "last_name"
+            name: "lastName"
+            type: "string"
+          - field: "department"
+            type: "string"
+          - field: "title"
+            type: "string"
+    
+    relationships:
+      # Using explicit source configuration - much clearer!
+      - type: "REPORTS_TO"
+        source: "hr.employees"              # Explicit source table
+        from_id_column: "employee_id"       # Column containing subordinate ID
+        to_id_column: "manager_id"          # Column containing manager ID
+        from_node: "Employee"               # Maps to Employee nodes (subordinate)
+        to_node: "Employee"                 # Maps to Employee nodes (manager)
+        properties:
+          - field: "reporting_since"
+            name: "since"
+            type: "date"
+
+  # Example 2: Junction table relationships with explicit source
+  - name: "project_assignments"
+    
+    nodes:
+      - label: "Employee"
+        source: "hr.employees"
+        id_field: "employee_id"
+        properties:
+          - field: "first_name"
+            name: "firstName"
+            type: "string"
+          - field: "last_name"
+            name: "lastName"
+            type: "string"
+      
+      - label: "Project"
+        source: "projects.projects"
+        id_field: "project_id"
+        properties:
+          - field: "project_name"
+            name: "name"
+            type: "string"
+          - field: "budget"
+            type: "float"
+    
+    relationships:
+      # Junction table with explicit source - no complex JOINs needed!
+      - type: "ASSIGNED_TO"
+        source: "hr.assignments"            # Junction table as source
+        from_id_column: "employee_id"       # FK to employees
+        to_id_column: "project_id"          # FK to projects
+        from_node: "Employee"
+        to_node: "Project"
+        properties:
+          - field: "role"
+            type: "string"
+          - field: "allocation_percentage"
+            name: "allocation"
+            type: "float"
+          - field: "start_date"
+            name: "startDate"
+            type: "date"
+          - field: "end_date"
+            name: "endDate"
+            type: "date"
+
+  # Example 3: Tag relationships with explicit source
+  - name: "entity_tags"
+    
+    nodes:
+      - label: "Entity"
+        source: "projects.entities"
+        id_field: "entity_id"
+        properties:
+          - field: "entity_name"
+            name: "name"
+            type: "string"
+          - field: "entity_type"
+            name: "type"
+            type: "string"
+      
+      - label: "Tag"
+        source: "projects.tags"
+        id_field: "tag_id"
+        properties:
+          - field: "tag_name"
+            name: "name"
+            type: "string"
+          - field: "category"
+            type: "string"
+    
+    relationships:
+      # Tag assignments with explicit source
+      - type: "HAS_TAG"
+        source: "projects.tag_assignments"  # Explicit lookup table
+        from_id_column: "entity_id"         # Which entity
+        to_id_column: "tag_id"              # Which tag
+        from_node: "Entity"
+        to_node: "Tag"
+        properties:
+          - field: "assigned_by"
+            name: "assignedBy"
+            type: "string"
+          - field: "assigned_date"
+            name: "assignedDate"
+            type: "datetime"
+          - field: "confidence_score"
+            name: "confidence"
+            type: "float"
+
+output:
+  format: "csv"
+  directory: "output/explicit_relationships"

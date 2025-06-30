@@ -36,7 +36,10 @@ class MixedDataReader:
     """Reader that handles both SQLite databases and CSV sources."""
 
     def __init__(
-        self, databases: List[Dict[str, str]], csv_sources: List[Dict[str, Any]], chunk_size: int = 10000
+        self,
+        databases: List[Dict[str, str]],
+        csv_sources: List[Dict[str, Any]],
+        chunk_size: int = 10000,
     ):
         """Initialize with both SQLite and CSV configurations."""
         self.sqlite_reader = SQLiteReader(databases, chunk_size) if databases else None

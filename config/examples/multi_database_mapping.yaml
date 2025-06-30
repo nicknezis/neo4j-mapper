@@ -84,6 +84,9 @@ mappings:
     
     relationships:
       - type: "ASSIGNED_TO"
+        source: "pm.project_assignments"
+        from_id_column: "employee_id"
+        to_id_column: "project_id"
         from_node: "Employee"
         to_node: "Project"
         properties:
@@ -95,10 +98,16 @@ mappings:
             type: "float"
       
       - type: "WORKS_IN"
+        source: "hr.employees"
+        from_id_column: "employee_id"
+        to_id_column: "department_id"
         from_node: "Employee"
         to_node: "Department"
       
       - type: "LOGGED_TIME"
+        source: "pm.time_entries"
+        from_id_column: "employee_id"
+        to_id_column: "project_id"
         from_node: "Employee"
         to_node: "Project"
         properties:
@@ -112,24 +121,13 @@ mappings:
   # Separate mapping for organizational structure
   - name: "org_structure"
     
-    nodes:
-      - label: "Manager"
-        source: "hr.employees"
-        id_field: "employee_id"
-        properties:
-          - field: "first_name"
-            type: "string"
-          - field: "last_name"
-            type: "string"
-          - field: "management_level"
-            type: "string"
-        # Filter to only include managers
-        where_clause: "is_manager = 1"
-    
     relationships:
       - type: "REPORTS_TO"
-        from_node: "Employee"
-        to_node: "Manager"
+        source: "hr.employees"          # Explicit source table
+        from_id_column: "employee_id"   # Subordinate's ID
+        to_id_column: "manager_id"      # Manager's ID
+        from_node: "Employee"           # References employees from employee_project mapping
+        to_node: "Employee"             # Also references employees (as managers)
         properties:
           - field: "reporting_start_date"
             type: "date"

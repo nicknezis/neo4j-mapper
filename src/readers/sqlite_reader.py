@@ -12,15 +12,17 @@ from dataclasses import dataclass
 @dataclass
 class QueryPlanStep:
     """Represents a step in the SQLite query execution plan."""
+
     id: int
     parent: int
     notused: int
     detail: str
-    
-    
-@dataclass 
+
+
+@dataclass
 class QueryPlanAnalysis:
     """Analysis results for a query execution plan."""
+
     steps: List[QueryPlanStep]
     has_table_scan: bool
     table_scans: List[str]
@@ -293,56 +295,59 @@ class SQLiteReader:
 
         return chunk_size
 
-    def analyze_query_plan(self, query: str, params: Optional[Dict] = None) -> QueryPlanAnalysis:
+    def analyze_query_plan(
+        self, query: str, params: Optional[Dict] = None
+    ) -> QueryPlanAnalysis:
         """Analyze the execution plan for a query to identify potential performance issues.
-        
+
         Args:
             query: SQL query to analyze
             params: Query parameters
-            
+
         Returns:
             QueryPlanAnalysis with performance warnings and recommendations
         """
         if not self.connections:
             raise RuntimeError("No database connections available")
-            
+
         # Use the first connection for plan analysis
         conn = next(iter(self.connections.values()))
-        
+
         try:
             cursor = conn.cursor()
-            
+
             # Get the query execution plan
             explain_query = f"EXPLAIN QUERY PLAN {query}"
-            
+
             if params:
                 cursor.execute(explain_query, params)
             else:
                 cursor.execute(explain_query)
-                
+
             plan_rows = cursor.fetchall()
-            
+
             # Parse plan steps
             steps = []
             for row in plan_rows:
-                steps.append(QueryPlanStep(
-                    id=row[0], 
-                    parent=row[1], 
-                    notused=row[2], 
-                    detail=row[3]
-                ))
-            
+                steps.append(
+                    QueryPlanStep(
+                        id=row[0], parent=row[1], notused=row[2], detail=row[3]
+                    )
+                )
+
             # Analyze the plan
             analysis = self._analyze_plan_steps(steps)
-            
+
             # Get table sizes for additional context
             table_sizes = self._get_table_sizes()
             analysis = self._add_table_size_warnings(analysis, table_sizes)
-            
-            logging.info(f"Query plan analyzed: {len(analysis.warnings)} warnings found")
-            
+
+            logging.info(
+                f"Query plan analyzed: {len(analysis.warnings)} warnings found"
+            )
+
             return analysis
-            
+
         except sqlite3.Error as e:
             logging.error(f"Failed to analyze query plan: {e}")
             # Return basic analysis if explain fails
@@ -355,7 +360,7 @@ class SQLiteReader:
                 indexed_tables=[],
                 warnings=[f"Could not analyze query plan: {e}"],
                 estimated_cost="Unknown",
-                complexity_score=0
+                complexity_score=0,
             )
 
     def _analyze_plan_steps(self, steps: List[QueryPlanStep]) -> QueryPlanAnalysis:
@@ -365,19 +370,19 @@ class SQLiteReader:
         warnings = []
         has_nested_loop = False
         complexity_score = 0
-        
+
         for step in steps:
             detail = step.detail.upper()
-            
+
             # Check for table scans
             if "SCAN TABLE" in detail:
                 # Extract table name
-                table_match = re.search(r'SCAN TABLE (\w+)', detail)
+                table_match = re.search(r"SCAN TABLE (\w+)", detail)
                 if table_match:
                     table_name = table_match.group(1)
                     table_scans.append(table_name)
                     complexity_score += 10
-                    
+
                     # Check if using index
                     if "USING INDEX" not in detail:
                         warnings.append(
@@ -386,20 +391,22 @@ class SQLiteReader:
                         )
                     else:
                         # Extract index name
-                        index_match = re.search(r'USING INDEX (\w+)', detail)
+                        index_match = re.search(r"USING INDEX (\w+)", detail)
                         if index_match:
-                            indexed_tables.append(f"{table_name}({index_match.group(1)})")
-            
+                            indexed_tables.append(
+                                f"{table_name}({index_match.group(1)})"
+                            )
+
             # Check for index searches
             elif "SEARCH TABLE" in detail and "USING INDEX" in detail:
-                table_match = re.search(r'SEARCH TABLE (\w+)', detail)
-                index_match = re.search(r'USING INDEX (\w+)', detail)
+                table_match = re.search(r"SEARCH TABLE (\w+)", detail)
+                index_match = re.search(r"USING INDEX (\w+)", detail)
                 if table_match and index_match:
                     table_name = table_match.group(1)
                     index_name = index_match.group(1)
                     indexed_tables.append(f"{table_name}({index_name})")
                     complexity_score += 2
-                    
+
             # Check for automatic index creation
             elif "AUTOMATIC COVERING INDEX" in detail or "AUTOMATIC INDEX" in detail:
                 warnings.append(
@@ -407,12 +414,12 @@ class SQLiteReader:
                     "for better performance on repeated queries."
                 )
                 complexity_score += 5
-                
+
             # Check for nested loops (multiple scans)
             elif "NESTED LOOP" in detail:
                 has_nested_loop = True
                 complexity_score += 5
-                
+
             # Check for sorting operations
             elif "ORDER BY" in detail or "SORT" in detail:
                 warnings.append(
@@ -420,7 +427,7 @@ class SQLiteReader:
                     "for better performance."
                 )
                 complexity_score += 3
-                
+
             # Check for temporary B-trees
             elif "TEMP B-TREE" in detail:
                 warnings.append(
@@ -450,20 +457,20 @@ class SQLiteReader:
             indexed_tables=indexed_tables,
             warnings=warnings,
             estimated_cost=estimated_cost,
-            complexity_score=complexity_score
+            complexity_score=complexity_score,
         )
 
     def _get_table_sizes(self) -> Dict[str, int]:
         """Get row counts for all tables to help with performance analysis."""
         table_sizes = {}
-        
+
         for alias, conn in self.connections.items():
             try:
                 cursor = conn.cursor()
                 # Get all table names
                 cursor.execute("SELECT name FROM sqlite_master WHERE type='table'")
                 tables = cursor.fetchall()
-                
+
                 for (table_name,) in tables:
                     try:
                         cursor.execute(f"SELECT COUNT(*) FROM {table_name}")
@@ -472,20 +479,22 @@ class SQLiteReader:
                     except sqlite3.Error:
                         # Skip if table access fails
                         continue
-                        
+
             except sqlite3.Error as e:
                 logging.warning(f"Could not get table sizes for {alias}: {e}")
-                
+
         return table_sizes
 
-    def _add_table_size_warnings(self, analysis: QueryPlanAnalysis, table_sizes: Dict[str, int]) -> QueryPlanAnalysis:
+    def _add_table_size_warnings(
+        self, analysis: QueryPlanAnalysis, table_sizes: Dict[str, int]
+    ) -> QueryPlanAnalysis:
         """Add warnings based on table sizes and query plan."""
         large_table_threshold = 100000  # Rows
-        medium_table_threshold = 10000   # Rows
-        
+        medium_table_threshold = 10000  # Rows
+
         for table_name in analysis.table_scans:
             table_size = table_sizes.get(table_name, 0)
-            
+
             if table_size > large_table_threshold:
                 analysis.warnings.append(
                     f"⚠️  PERFORMANCE WARNING: Table scan on large table '{table_name}' "
@@ -493,29 +502,31 @@ class SQLiteReader:
                     f"Consider adding indexes on JOIN/WHERE conditions."
                 )
                 analysis.complexity_score += 20
-                
+
             elif table_size > medium_table_threshold:
                 analysis.warnings.append(
                     f"⚠️  Table scan on medium table '{table_name}' ({table_size:,} rows). "
                     f"Consider optimizing with indexes for better performance."
                 )
                 analysis.complexity_score += 10
-                
+
         # Update estimated cost based on table sizes
         if analysis.complexity_score > 50:
             analysis.estimated_cost = "Very High"
         elif analysis.complexity_score > 30:
             analysis.estimated_cost = "High"
-            
+
         return analysis
 
-    def analyze_join_performance(self, joins: List[Dict[str, Any]], select_columns: Optional[List[str]] = None) -> QueryPlanAnalysis:
+    def analyze_join_performance(
+        self, joins: List[Dict[str, Any]], select_columns: Optional[List[str]] = None
+    ) -> QueryPlanAnalysis:
         """Analyze JOIN query performance before execution.
-        
+
         Args:
             joins: List of JOIN configurations
             select_columns: Optional list of columns to select
-            
+
         Returns:
             QueryPlanAnalysis with performance warnings
         """
@@ -547,22 +558,24 @@ class SQLiteReader:
 
         # Analyze the complete query
         analysis = self.analyze_query_plan(query.strip())
-        
+
         # Add JOIN-specific warnings
         if len(joins) > 3:
             analysis.warnings.append(
                 f"Complex query with {len(joins)} JOINs. Consider breaking into smaller queries "
                 f"or ensuring all JOIN conditions use indexed columns."
             )
-            
+
         return analysis
 
     def execute_join_query(
-        self, joins: List[Dict[str, Any]], select_columns: Optional[List[str]] = None,
-        analyze_performance: bool = True
+        self,
+        joins: List[Dict[str, Any]],
+        select_columns: Optional[List[str]] = None,
+        analyze_performance: bool = True,
     ) -> pd.DataFrame:
         """Execute a query with JOIN operations.
-        
+
         Args:
             joins: List of JOIN configurations
             select_columns: Optional list of columns to select
@@ -575,12 +588,12 @@ class SQLiteReader:
         if analyze_performance:
             try:
                 analysis = self.analyze_join_performance(joins, select_columns)
-                
+
                 # Log performance warnings
                 if analysis.warnings:
                     for warning in analysis.warnings:
                         logging.warning(f"Query Performance: {warning}")
-                
+
                 # Log performance summary
                 logging.info(
                     f"Query Analysis: Cost={analysis.estimated_cost}, "
@@ -588,14 +601,14 @@ class SQLiteReader:
                     f"UsesIndex={analysis.uses_index}, "
                     f"ComplexityScore={analysis.complexity_score}"
                 )
-                
+
                 # Warn if query might be very slow
                 if analysis.estimated_cost in ["High", "Very High"]:
                     logging.warning(
                         f"⚠️  Query has {analysis.estimated_cost.lower()} estimated cost. "
                         f"Consider optimizing before executing on large datasets."
                     )
-                    
+
             except Exception as e:
                 logging.warning(f"Could not analyze query performance: {e}")
 

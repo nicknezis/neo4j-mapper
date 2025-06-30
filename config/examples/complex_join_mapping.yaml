@@ -83,6 +83,9 @@ mappings:
     # Relationship definitions
     relationships:
       - type: "PLACED_ORDER"
+        source: "orders"
+        from_id_column: "user_id"
+        to_id_column: "id"
         from_node: "User"
         to_node: "Order"
         # Only include relationships for orders placed this year
@@ -92,6 +95,9 @@ mappings:
             type: "datetime"
       
       - type: "CONTAINS"
+        source: "order_items"
+        from_id_column: "order_id"
+        to_id_column: "product_id"
         from_node: "Order"
         to_node: "Product"
         # Only include high-quantity items (> 1 unit)
@@ -123,6 +129,9 @@ mappings:
     
     relationships:
       - type: "HAD_SESSION"
+        source: "sessions"
+        from_id_column: "user_id"
+        to_id_column: "session_id"
         from_node: "User"
         to_node: "UserSession"
         # Note: This would require the User nodes to be created first

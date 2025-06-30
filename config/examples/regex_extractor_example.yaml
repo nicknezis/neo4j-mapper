@@ -91,6 +91,9 @@ mappings:
 
     relationships:
       - type: "WORKS_IN"
+        source: "users"
+        from_id_column: "id"
+        to_id_column: "dept_id"
         from_node: "User"
         to_node: "Department"
         properties:

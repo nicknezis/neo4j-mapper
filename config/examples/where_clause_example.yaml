@@ -70,6 +70,9 @@ mappings:
     relationships:
       # Only include relationships for successful orders
       - type: "PLACED_ORDER"
+        source: "ecommerce.orders"
+        from_id_column: "user_id"
+        to_id_column: "id"
         from_node: "ActiveUser"
         to_node: "RecentOrder"
         where: "status = 'completed' OR status = 'shipped'"
@@ -81,6 +84,9 @@ mappings:
       
       # Only include relationships for items with quantity > 1
       - type: "CONTAINS_ITEM"
+        source: "ecommerce.order_items"
+        from_id_column: "order_id"
+        to_id_column: "item_id"
         from_node: "RecentOrder"
         to_node: "HighValueItem"
         where: "quantity > 1"

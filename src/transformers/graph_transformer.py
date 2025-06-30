@@ -11,8 +11,12 @@ from .data_mapper import DataMapper
 class GraphTransformer:
     """Transforms relational data into graph format for Neo4j."""
 
-    def __init__(self, enable_parallel: bool = True, max_workers: Optional[int] = None, 
-                 memory_efficient: bool = True):
+    def __init__(
+        self,
+        enable_parallel: bool = True,
+        max_workers: Optional[int] = None,
+        memory_efficient: bool = True,
+    ):
         self.data_mapper = DataMapper()
         self.logger = logging.getLogger(__name__)
         self.enable_parallel = enable_parallel
@@ -121,10 +125,13 @@ class GraphTransformer:
         return rel_df
 
     def _add_computed_properties(
-        self, df: pd.DataFrame, computed_props: List[Dict[str, Any]], inplace: bool = True
+        self,
+        df: pd.DataFrame,
+        computed_props: List[Dict[str, Any]],
+        inplace: bool = True,
     ) -> pd.DataFrame:
         """Add computed properties to the DataFrame.
-        
+
         Args:
             df: Input DataFrame
             computed_props: List of computed property configurations
