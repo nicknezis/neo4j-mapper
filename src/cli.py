@@ -278,6 +278,25 @@ output:
         sys.exit(1)
 
 
+def _resolve_alias_and_table(source: str, config: Dict[str, Any]) -> tuple:
+    """Resolve a `source` string to (alias, table_name).
+
+    Accepts either "alias.table" or a bare "table" (in which case the first
+    available data source alias is used).
+    """
+    source_parts = source.split(".")
+    if len(source_parts) == 2:
+        return source_parts[0], source_parts[1]
+
+    databases = config.get("databases", [])
+    csv_sources = config.get("csv_sources", [])
+    if databases:
+        return databases[0]["alias"], source
+    if csv_sources:
+        return csv_sources[0]["alias"], source
+    raise ValueError("No data sources found")
+
+
 def _process_mapping(
     mapping_config: Dict[str, Any], config: Dict[str, Any], output_dir: str, format: str
 ):
@@ -290,37 +309,57 @@ def _process_mapping(
     # Create appropriate reader using factory
     reader = DataReaderFactory.create_reader(config)
 
+    df = None
+    multi_source_data = None
+
     with reader:
         # Execute joins if specified
         if "joins" in mapping_config and mapping_config["joins"]:
             df = reader.execute_join_query(mapping_config["joins"])
         else:
-            # Read from single table (use first node's source)
-            first_node = mapping_config["nodes"][0]
-            source_parts = first_node["source"].split(".")
-            if len(source_parts) == 2:
-                alias, table_name = source_parts
+            # Collect every distinct source declared by nodes and relationships.
+            # When more than one source is referenced without a join, we must
+            # load each source independently — otherwise downstream nodes/edges
+            # would silently pull fields from the wrong table.
+            sources = []
+            seen = set()
+            for node_config in mapping_config["nodes"]:
+                src = node_config["source"]
+                if src not in seen:
+                    seen.add(src)
+                    sources.append(src)
+            for rel_config in mapping_config.get("relationships", []):
+                src = rel_config["source"]
+                if src not in seen:
+                    seen.add(src)
+                    sources.append(src)
+
+            if len(sources) == 1:
+                alias, table_name = _resolve_alias_and_table(sources[0], config)
+                df = reader.read_table(alias, table_name)
             else:
-                # Try to find the first available alias
-                databases = config.get("databases", [])
-                csv_sources = config.get("csv_sources", [])
-
-                if databases:
-                    alias = databases[0]["alias"]
-                elif csv_sources:
-                    alias = csv_sources[0]["alias"]
-                else:
-                    raise ValueError("No data sources found")
-
-                table_name = first_node["source"]
-
-            df = reader.read_table(alias, table_name)
-
-    logger.info(f"Read {len(df)} rows from database")
+                multi_source_data = {}
+                for src in sources:
+                    alias, table_name = _resolve_alias_and_table(src, config)
+                    src_df = reader.read_table(alias, table_name)
+                    multi_source_data[src] = src_df
+                    logger.info(f"Read {len(src_df)} rows from {src}")
 
     # Transform data
     transformer = GraphTransformer()
-    nodes_data, relationships_data = transformer.transform_mapping(df, mapping_config)
+    if multi_source_data is not None:
+        logger.info(
+            f"Using multi-source transform across {len(multi_source_data)} sources: "
+            f"{sorted(multi_source_data)}"
+        )
+        nodes_data, relationships_data = transformer.transform_mapping_multi_source(
+            multi_source_data, mapping_config
+        )
+    else:
+        logger.info(f"Read {len(df)} rows from database")
+        nodes_data, relationships_data = transformer.transform_mapping(
+            df, mapping_config
+        )
 
     # Validate transformed data
     errors = transformer.validate_graph_data(nodes_data, relationships_data)

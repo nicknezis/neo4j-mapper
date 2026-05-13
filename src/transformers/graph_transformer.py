@@ -59,6 +59,71 @@ class GraphTransformer:
 
         return nodes_data, relationships_data
 
+    def transform_mapping_multi_source(
+        self,
+        data: Dict[str, pd.DataFrame],
+        mapping_config: Dict[str, Any],
+    ) -> Tuple[List[pd.DataFrame], List[pd.DataFrame]]:
+        """Transform a mapping where each node/relationship reads from its own source df.
+
+        Unlike transform_mapping, which assumes a single (possibly joined) DataFrame
+        for all nodes and relationships, this dispatches each item to the DataFrame
+        keyed by its `source` value in `data`.
+        """
+        nodes_data: List[pd.DataFrame] = []
+        relationships_data: List[pd.DataFrame] = []
+
+        mapping_name = mapping_config.get("name", "unnamed_mapping")
+        self.logger.info(
+            f"Processing mapping (multi-source): {mapping_name} "
+            f"across {len(data)} source dataframes"
+        )
+
+        for node_config in mapping_config["nodes"]:
+            source = node_config["source"]
+            if source not in data:
+                raise KeyError(
+                    f"Node '{node_config['label']}' declares source '{source}' "
+                    f"but no DataFrame was provided for it. "
+                    f"Available sources: {sorted(data)}"
+                )
+            try:
+                node_df = self._transform_node(data[source], node_config)
+                nodes_data.append(node_df)
+                self.logger.info(
+                    f"Processed node: {node_config['label']} ({len(node_df)} records)"
+                )
+            except Exception as e:
+                self.logger.error(
+                    f"Error processing node {node_config['label']}: {e}"
+                )
+                raise
+
+        for rel_config in mapping_config.get("relationships", []):
+            source = rel_config["source"]
+            if source not in data:
+                raise KeyError(
+                    f"Relationship '{rel_config['type']}' declares source '{source}' "
+                    f"but no DataFrame was provided for it. "
+                    f"Available sources: {sorted(data)}"
+                )
+            try:
+                rel_df = self._transform_relationship(
+                    data[source], rel_config, mapping_config["nodes"]
+                )
+                relationships_data.append(rel_df)
+                self.logger.info(
+                    f"Processed relationship: {rel_config['type']} "
+                    f"({len(rel_df)} records)"
+                )
+            except Exception as e:
+                self.logger.error(
+                    f"Error processing relationship {rel_config['type']}: {e}"
+                )
+                raise
+
+        return nodes_data, relationships_data
+
     def _transform_node(
         self, df: pd.DataFrame, node_config: Dict[str, Any]
     ) -> pd.DataFrame:
