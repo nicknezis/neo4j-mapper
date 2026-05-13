@@ -88,7 +88,7 @@ class GraphTransformer:
                     f"Available sources: {sorted(data)}"
                 )
             try:
-                node_df = self._transform_node(data[source], node_config)
+                node_df = self._transform_node(data[source].copy(), node_config)
                 nodes_data.append(node_df)
                 self.logger.info(
                     f"Processed node: {node_config['label']} ({len(node_df)} records)"
@@ -109,7 +109,7 @@ class GraphTransformer:
                 )
             try:
                 rel_df = self._transform_relationship(
-                    data[source], rel_config, mapping_config["nodes"]
+                    data[source].copy(), rel_config, mapping_config["nodes"]
                 )
                 relationships_data.append(rel_df)
                 self.logger.info(

@@ -96,6 +96,47 @@ class TestMultiSourceMapping:
         assert sorted(rel_df["_from_id"].tolist()) == [1, 1, 2, 3]
         assert sorted(rel_df["_to_id"].tolist()) == [101, 102, 103, 104]
 
+    def test_shared_source_not_mutated_between_configs(self):
+        """Two node configs sharing the same source must not corrupt each other via in-place ops."""
+        # Both node configs read from the same 'orders' DataFrame.
+        orders = pd.DataFrame(
+            {
+                "order_id": [101, 102],
+                "user_id": [1, 2],
+                "total_amount": [10.0, 20.0],
+            }
+        )
+        data = {"orders": orders}
+
+        config = {
+            "name": "shared_source",
+            "nodes": [
+                {
+                    "label": "Order",
+                    "source": "orders",
+                    "id_field": "order_id",
+                    "properties": [{"field": "total_amount", "type": "float"}],
+                },
+                {
+                    "label": "OrderByUser",
+                    "source": "orders",
+                    "id_field": "user_id",
+                    "properties": [{"field": "total_amount", "type": "float"}],
+                },
+            ],
+        }
+
+        # Should not raise and each node should have correct row counts.
+        nodes_data, _ = self.transformer.transform_mapping_multi_source(data, config)
+
+        order_node = next(n for n in nodes_data if n.iloc[0]["_label"] == "Order")
+        order_by_user_node = next(
+            n for n in nodes_data if n.iloc[0]["_label"] == "OrderByUser"
+        )
+
+        assert len(order_node) == 2
+        assert len(order_by_user_node) == 2
+
     def test_missing_source_raises(self):
         """A node referencing an unloaded source should fail loudly."""
         data = self._build_data()
